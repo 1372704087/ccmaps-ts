@@ -1,0 +1,23 @@
+{
+  "name": "cncmaps-ts",
+  "version": "1.0.0",
+  "description": "TypeScript port of CNCMaps — C&C Red Alert 2 / Tiberian Sun map renderer",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "cncmaps": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "cli": "node dist/cli.js",
+    "test": "tsc --noEmit -p tsconfig.json",
+    "web": "node src/web/server.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "pngjs": "^7.0.0",
+    "typescript": "^7.0.2"
+  }
+}

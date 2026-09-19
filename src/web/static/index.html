@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CNCMaps TS · 地图渲染器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="glow glow-a"></div>
+<div class="glow glow-b"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div class="brand-text">
+      <h1>CNCMaps <span>TS</span></h1>
+      <p>Red Alert 2 / Yuri's Revenge · 地图渲染器</p>
+    </div>
+  </div>
+  <div class="engine-tag" id="engineTag">引擎 · 自动</div>
+</header>
+
+<main class="layout">
+  <!-- 左：来源 -->
+  <section class="panel sources">
+    <h2 class="panel-title"><span>01</span>地图来源</h2>
+
+    <label class="field-label">选择地图（上传本机地图文件）</label>
+    <div class="row">
+      <button id="uploadBtn" class="btn btn-ghost upload-lg">📁 上传地图文件</button>
+    </div>
+    <input id="fileInput" type="file" accept=".map,.yrm,.mpr" hidden>
+
+    <label class="field-label">当前选择</label>
+    <div class="maplist" id="maplist">
+      <div class="maplist-empty">请上传一个 .map / .yrm / .mpr 地图文件</div>
+    </div>
+  </section>
+
+  <!-- 中：参数 -->
+  <section class="panel params">
+    <h2 class="panel-title"><span>02</span>渲染参数</h2>
+
+    <div class="grid2">
+      <div class="field">
+        <label>输出格式</label>
+        <select id="format">
+          <option value="png" selected>PNG</option>
+          <option value="jpg">JPEG</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>引擎</label>
+        <select id="engine">
+          <option value="" selected>自动检测</option>
+          <option value="yr">尤里的复仇 (YR)</option>
+          <option value="ra2">红色警戒 2 (RA2)</option>
+          <option value="ts">泰伯利亚之日 (TS)</option>
+          <option value="fs">火风暴 (FS)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label>尺寸模式</label>
+        <select id="sizeMode">
+          <option value="" selected>自动</option>
+          <option value="local">局部 (LocalSize)</option>
+          <option value="full">全图 (FullMap)</option>
+        </select>
+      </div>
+      <div class="field" id="pngCompressionField">
+        <label>PNG 压缩 <span id="pngCompressionVal">4</span></label>
+        <input id="pngCompression" type="range" min="1" max="9" value="4">
+      </div>
+    </div>
+
+    <div class="toggles">
+      <label class="toggle"><input type="checkbox" id="markStartPos"><span class="tk"></span>标记出生点</label>
+      <label class="toggle"><input type="checkbox" id="markOre"><span class="tk"></span>高亮矿石</label>
+    </div>
+
+    <div class="render-zone">
+      <button id="renderBtn" class="btn btn-primary" disabled>
+        <span class="play">▶</span> 开始渲染
+      </button>
+      <div class="render-state" id="renderState">尚未渲染</div>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-meta">
+        <span id="progressPct">0%</span>
+        <span id="progressPhase">等待开始</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右：预览 -->
+  <section class="panel preview">
+    <h2 class="panel-title"><span>03</span>预览</h2>
+    <div class="preview-frame" id="previewFrame">
+      <div class="placeholder" id="placeholder">
+        <div class="ph-icon">🛰</div>
+        <p>渲染完成后自动显示地图预览</p>
+      </div>
+      <img id="previewImg" alt="地图预览" style="display:none">
+    </div>
+    <div class="preview-tools">
+      <button id="downloadBtn" class="btn btn-ghost" disabled>⬇ 下载图片</button>
+      <span class="preview-tip">点击预览图可放大查看</span>
+    </div>
+    <div class="preview-meta" id="previewMeta"></div>
+  </section>
+</main>
+
+<footer class="statusbar">
+  <span class="left"><span id="statusDot" class="dot"></span><span id="statusText">就绪</span></span>
+  <span class="credit"><a href="https://github.com/zzattack/ccmaps-net" target="_blank" rel="noopener noreferrer">CNCMaps - NET</a>（可点击跳转 GitHub） | CNCMaps TS 移植版 · by 1372704087</span>
+  <span class="right">
+    <span class="sbinfo" id="infoMaps"></span>
+    <span class="sbinfo" id="infoRender">最近: 尚未渲染</span>
+  </span>
+</footer>
+
+<!-- 图片放大查看 -->
+<div class="lightbox-backdrop" id="lightbox" hidden>
+  <div class="lightbox-card">
+    <div class="lightbox-head">
+      <span id="lightboxTitle">图片预览</span>
+      <button class="modal-close" id="lightboxClose" aria-label="关闭">×</button>
+    </div>
+    <div class="lightbox-body" id="lightboxBody">
+      <img id="lightboxImg" alt="放大预览">
+    </div>
+    <div class="lightbox-foot">
+      <div class="zoom-ctl">
+        <button class="zbtn" data-zoom="out" title="缩小">−</button>
+        <span class="zoom-pct" id="zoomPct">100%</span>
+        <button class="zbtn" data-zoom="in" title="放大">＋</button>
+        <button class="zbtn" data-zoom="fit" title="适应窗口">适应</button>
+        <button class="zbtn" data-zoom="1" title="实际大小">100%</button>
+      </div>
+      <a class="btn btn-primary" id="lightboxDownload" href="#" download>⬇ 下载原图</a>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
