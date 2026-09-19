@@ -17,7 +17,7 @@
     lightbox: $('lightbox'), lightboxImg: $('lightboxImg'), lightboxTitle: $('lightboxTitle'),
     lightboxClose: $('lightboxClose'), lightboxDownload: $('lightboxDownload'),
     lightboxBody: $('lightboxBody'), zoomPct: $('zoomPct'),
-    engineTag: $('engineTag'),
+    engineTag: $('engineTag'), langBtn: $('langBtn'),
     statusDot: $('statusDot'), statusText: $('statusText'),
     infoMaps: $('infoMaps'), infoRender: $('infoRender'),
   };
@@ -28,14 +28,189 @@
   let renderStart = 0;
   let lastStartArgs = [];
 
+  // ---- i18n ----
+  const LANG_KEY = 'cncmaps_lang';
+  const I18N = {
+    zh: {
+      'title': 'CNCMaps TS · 地图渲染器',
+      'langBtn': '🌐 English',
+      'tagline': 'Red Alert 2 / Yuri\'s Revenge · 地图渲染器',
+      'srcTitle': '地图来源',
+      'srcLabel': '选择地图（上传本机地图文件）',
+      'uploadBtn': '📁 上传地图文件',
+      'curLabel': '当前选择',
+      'maplistEmpty': '请上传一个 .map / .yrm / .mpr 地图文件',
+      'paramsTitle': '渲染参数',
+      'lblFormat': '输出格式',
+      'lblEngine': '引擎',
+      'engineAuto': '自动检测',
+      'engineYR': '尤里的复仇 (YR)',
+      'engineRA2': '红色警戒 2 (RA2)',
+      'engineTS': '泰伯利亚之日 (TS)',
+      'engineFS': '火风暴 (FS)',
+      'lblSizeMode': '尺寸模式',
+      'sizeAuto': '自动',
+      'sizeLocal': '局部 (LocalSize)',
+      'sizeFull': '全图 (FullMap)',
+      'lblPngComp': 'PNG 压缩',
+      'tglStartPos': '标记出生点',
+      'tglOre': '高亮矿石',
+      'renderBtn': '开始渲染',
+      'renderStateIdle': '尚未渲染',
+      'phaseWait': '等待开始',
+      'prevTitle': '预览',
+      'previewPlaceholder': '渲染完成后自动显示地图预览',
+      'previewAlt': '地图预览',
+      'downloadImg': '⬇ 下载图片',
+      'previewTip': '点击预览图可放大查看',
+      'statusReady': '就绪',
+      'creditHint': '（可点击跳转 GitHub）',
+      'infoRenderEmpty': '最近: 尚未渲染',
+      'lightboxTitle': '图片预览',
+      'closeLabel': '关闭',
+      'zoomIn': '放大', 'zoomOut': '缩小', 'zoomFit': '适应窗口', 'zoom100': '实际大小',
+      'enginePrefix': '引擎 · ',
+      'selPrefix': '已选择：',
+      'selMap': '已选择地图',
+      'extErr': '仅支持 .map / .yrm / .mpr 文件',
+      'uploading': '上传中…',
+      'uploadFail': '上传失败',
+      'uploaded': '已上传',
+      'uploadedPrefix': '已上传：',
+      'uploadDone': '上传完成，已选择地图',
+      'phaseParsing': '解析地图 / 规则…', 'phaseTiles': '绘制地形…',
+      'phaseObjects': '绘制建筑与单位…', 'phaseEncoding': '编码输出…',
+      'phaseDrawing': '绘制中…',
+      'phaseSubmit': '提交任务…',
+      'renderingPrefix': '渲染中：',
+      'rendering': '渲染中…',
+      'complete': '完成',
+      'failCode': '失败 (code ',
+      'renderFailed': '渲染失败',
+      'renderError': '渲染错误',
+      'renderDone': '渲染完成',
+      'errorPrefix': '错误：',
+      'reqFailed': '请求失败',
+      'reqFailedPrefix': '请求失败：',
+      'recentPrefix': '最近: ',
+    },
+    en: {
+      'title': 'CNCMaps TS · Map Renderer',
+      'langBtn': '🌐 中文',
+      'tagline': 'Red Alert 2 / Yuri\'s Revenge · Map Renderer',
+      'srcTitle': 'Map Source',
+      'srcLabel': 'Choose a map (upload a local file)',
+      'uploadBtn': '📁 Upload Map File',
+      'curLabel': 'Current Selection',
+      'maplistEmpty': 'Please upload a .map / .yrm / .mpr map file',
+      'paramsTitle': 'Render Options',
+      'lblFormat': 'Output Format',
+      'lblEngine': 'Engine',
+      'engineAuto': 'Auto Detect',
+      'engineYR': 'Yuri\'s Revenge (YR)',
+      'engineRA2': 'Red Alert 2 (RA2)',
+      'engineTS': 'Tiberian Sun (TS)',
+      'engineFS': 'Firestorm (FS)',
+      'lblSizeMode': 'Size Mode',
+      'sizeAuto': 'Auto',
+      'sizeLocal': 'Local (LocalSize)',
+      'sizeFull': 'Full Map',
+      'lblPngComp': 'PNG Compression',
+      'tglStartPos': 'Mark Start Positions',
+      'tglOre': 'Highlight Ore',
+      'renderBtn': 'Start Render',
+      'renderStateIdle': 'Not rendered yet',
+      'phaseWait': 'Waiting to start',
+      'prevTitle': 'Preview',
+      'previewPlaceholder': 'Map preview will appear after rendering',
+      'previewAlt': 'map preview',
+      'downloadImg': '⬇ Download Image',
+      'previewTip': 'Click the preview to zoom in',
+      'statusReady': 'Ready',
+      'creditHint': '(click to open GitHub)',
+      'infoRenderEmpty': 'Recent: not rendered',
+      'lightboxTitle': 'Image Preview',
+      'closeLabel': 'Close',
+      'zoomIn': 'Zoom In', 'zoomOut': 'Zoom Out', 'zoomFit': 'Fit Window', 'zoom100': '100%',
+      'enginePrefix': 'Engine · ',
+      'selPrefix': 'Selected: ',
+      'selMap': 'Map selected',
+      'extErr': 'Only .map / .yrm / .mpr files are supported',
+      'uploading': 'Uploading…',
+      'uploadFail': 'Upload failed',
+      'uploaded': 'Uploaded',
+      'uploadedPrefix': 'Uploaded: ',
+      'uploadDone': 'Upload complete, map selected',
+      'phaseParsing': 'Parsing map / rules…', 'phaseTiles': 'Drawing terrain…',
+      'phaseObjects': 'Drawing buildings & units…', 'phaseEncoding': 'Encoding output…',
+      'phaseDrawing': 'Drawing…',
+      'phaseSubmit': 'Submitting…',
+      'renderingPrefix': 'Rendering: ',
+      'rendering': 'Rendering…',
+      'complete': 'Done',
+      'failCode': 'Failed (code ',
+      'renderFailed': 'Render failed',
+      'renderError': 'Render error',
+      'renderDone': 'Render complete',
+      'errorPrefix': 'Error: ',
+      'reqFailed': 'Request failed',
+      'reqFailedPrefix': 'Request failed: ',
+      'recentPrefix': 'Recent: ',
+    },
+  };
+  let LANG = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh';
+  const t = (key) => (I18N[LANG] && I18N[LANG][key] !== undefined ? I18N[LANG][key] : (I18N.zh[key] || key));
+
+  function applyLang() {
+    document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
+    document.title = t('title');
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    document.querySelectorAll('[data-i18n-alt]').forEach((el) => {
+      el.setAttribute('alt', t(el.getAttribute('data-i18n-alt')));
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+      el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
+    });
+    document.querySelectorAll('[data-i18n-aria]').forEach((el) => {
+      el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria')));
+    });
+    const cr = $('credit');
+    if (cr) {
+      cr.innerHTML = '<a href="https://github.com/zzattack/ccmaps-net" target="_blank" rel="noopener noreferrer">CNCMaps - NET</a>'
+        + t('creditHint') + ' | CNCMaps TS · by 1372704087';
+    }
+    els.langBtn.textContent = t('langBtn');
+    setEngineTag();
+    if (els.infoRender.textContent === I18N.zh['infoRenderEmpty'])
+      els.infoRender.textContent = t('infoRenderEmpty');
+    if (renderStateSupportsT(els.renderState.textContent))
+      els.renderState.textContent = t(renderStateSupportsT(els.renderState.textContent));
+  }
+  // map current dynamic render-state text back to its i18n key (for live switch)
+  function renderStateSupportsT(text) {
+    const keys = ['renderStateIdle', 'renderFailed', 'reqFailed', 'complete', 'renderDone'];
+    for (const k of keys) if (text === I18N.zh[k] || text === I18N.en[k]) return k;
+    return null;
+  }
+
+  function setLang(lang) {
+    LANG = lang;
+    localStorage.setItem(LANG_KEY, lang);
+    applyLang();
+  }
+  els.langBtn.onclick = () => setLang(LANG === 'zh' ? 'en' : 'zh');
+  //
+
   function setStatus(state, text) {
     els.statusDot.className = 'dot' + (state ? ' ' + state : '');
     els.statusText.textContent = text;
   }
   function setEngineTag() {
     const v = els.engine.value;
-    const names = { '': '自动检测', yr: '尤里的复仇', ra2: '红色警戒 2', ts: '泰伯利亚之日', fs: '火风暴' };
-    els.engineTag.textContent = '引擎 · ' + (names[v] || '自动');
+    const keys = { '': 'engineAuto', yr: 'engineYR', ra2: 'engineRA2', ts: 'engineTS', fs: 'engineFS' };
+    els.engineTag.textContent = t('enginePrefix') + (keys[v] ? t(keys[v]) : t('engineAuto'));
   }
 
   function fmtSize(n) {
@@ -50,16 +225,16 @@
     document.querySelectorAll('.maplist-item').forEach((x) => x.classList.remove('active'));
     if (item) item.classList.add('active');
     els.renderBtn.disabled = renderBusy ? true : false;
-    els.renderState.textContent = '已选择：' + m.name;
-    setStatus('ok', '已选择地图');
+    els.renderState.textContent = t('selPrefix') + m.name;
+    setStatus('ok', t('selMap'));
   }
 
   async function uploadMap(file) {
     if (!file) return;
     if (!/\.(map|yrm|mpr)$/i.test(file.name)) {
-      setStatus('err', '仅支持 .map / .yrm / .mpr 文件'); return;
+      setStatus('err', t('extErr')); return;
     }
-    setStatus('work', '上传中…');
+    setStatus('work', t('uploading'));
     try {
       const resp = await fetch('/api/upload', {
         method: 'POST',
@@ -67,19 +242,20 @@
         body: file,
       });
       const data = await resp.json();
-      if (!resp.ok || !data.token) throw new Error(data.error || '上传失败');
+      if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
       // clear the map list control to its uploaded-map selection
       els.maplist.innerHTML = '';
       const item = document.createElement('div');
       item.className = 'maplist-item active';
-      item.innerHTML = '<span class="ic">📤</span><span class="nm"></span><span class="sz">已上传</span>';
+      item.innerHTML = '<span class="ic">📤</span><span class="nm"></span><span class="sz"></span>';
       item.querySelector('.nm').textContent = data.name;
+      item.querySelector('.sz').textContent = t('uploaded');
       els.maplist.appendChild(item);
       selectMap({ name: data.name, size: data.size, uploadToken: data.token }, item);
-      els.infoMaps.textContent = '已上传：' + data.name;
-      setStatus('ok', '上传完成，已选择地图');
+      els.infoMaps.textContent = t('uploadedPrefix') + data.name;
+      setStatus('ok', t('uploadDone'));
     } catch (e) {
-      setStatus('err', '上传失败：' + (e && e.message || e));
+      setStatus('err', t('uploadFail') + ': ' + (e && e.message || e));
     }
   }
 
@@ -102,7 +278,7 @@
 
   function openLightbox(url, name) {
     els.lightboxImg.src = url;
-    els.lightboxTitle.textContent = name || '图片预览';
+    els.lightboxTitle.textContent = name || t('lightboxTitle');
     els.lightboxDownload.href = url.includes('/image/')
       ? url.replace('/image/', '/download/')
       : url;
@@ -196,10 +372,10 @@
     renderBusy = true;
     els.renderBtn.disabled = true;
     renderStart = Date.now();
-    setProgress(0, '提交任务…');
-    els.renderState.textContent = '渲染中：' + selectedMap.name;
+    setProgress(0, t('phaseSubmit'));
+    els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
     els.progressWrap.classList.add('show');
-    setStatus('work', '渲染中…');
+    setStatus('work', t('rendering'));
 
     try {
       const resp = await fetch('/api/render', {
@@ -225,16 +401,16 @@
           let evt;
           try { evt = JSON.parse(line); } catch { continue; }
           if (evt.type === 'start') {
-            els.engineTag.textContent = '引擎 · ' + argvShort(evt.args);
+            els.engineTag.textContent = t('enginePrefix') + argvShort(evt.args);
             lastStartArgs = evt.args;
           } else if (evt.type === 'progress') {
             lastProgress = evt.percent;
             setProgress(evt.percent, phaseLabel(evt.phase));
           } else if (evt.type === 'log') {
-            if (evt.level === 'fatal') setStatus('err', '渲染错误');
+            if (evt.level === 'fatal') setStatus('err', t('renderError'));
           } else if (evt.type === 'done') {
             if (evt.ok) {
-              setProgress(100, '完成');
+              setProgress(100, t('complete'));
               currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
               showPreview(evt.url, evt.name);
               els.downloadBtn.disabled = false;
@@ -242,24 +418,24 @@
               els.downloadBtn.dataset.name = evt.name;
               const ms = Date.now() - (renderStart || Date.now());
               const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
-              els.infoRender.textContent = '最近: ' + (evt.name || '') + ' · ' +
+              els.infoRender.textContent = t('recentPrefix') + (evt.name || '') + ' · ' +
                 argvShort(lastStartArgs) + ' · ' + dur;
-              els.renderState.textContent = '渲染完成';
-              setStatus('ok', '完成');
+              els.renderState.textContent = t('renderDone');
+              setStatus('ok', t('complete'));
             } else {
-              setProgress(lastProgress, '失败 (code ' + evt.code + ')');
-              els.renderState.textContent = '渲染失败';
-              setStatus('err', '渲染失败');
+              setProgress(lastProgress, t('failCode') + evt.code + ')');
+              els.renderState.textContent = t('renderFailed');
+              setStatus('err', t('renderFailed'));
             }
           } else if (evt.type === 'error') {
-            els.renderState.textContent = '错误：' + (evt.message || '未知');
-            setStatus('err', '错误');
+            els.renderState.textContent = t('errorPrefix') + (evt.message || '');
+            setStatus('err', t('reqFailed'));
           }
         }
       }
     } catch (e) {
-      els.renderState.textContent = '请求失败';
-      setStatus('err', '请求失败：' + (e && e.message || e));
+      els.renderState.textContent = t('reqFailed');
+      setStatus('err', t('reqFailedPrefix') + (e && e.message || e));
     } finally {
       renderBusy = false;
       els.renderBtn.disabled = selectedMap ? false : true;
@@ -269,19 +445,19 @@
   function argvShort(args) {
     const forced = args.find((a) => a.startsWith('--force-'));
     if (forced) {
-      const map = { ra2: '红色警戒 2', yr: '尤里的复仇', ts: '泰伯利亚之日', fs: '火风暴' };
+      const keys = { ra2: 'engineRA2', yr: 'engineYR', ts: 'engineTS', fs: 'engineFS' };
       const k = forced.replace('--force-', '');
-      return map[k] || k;
+      return keys[k] ? t(keys[k]) : k;
     }
-    return '自动检测';
+    return t('engineAuto');
   }
 
   function phaseLabel(p) {
-    const map = {
-      parsing: '解析地图 / 规则…', tiles: '绘制地形…', objects: '绘制建筑与单位…',
-      encoding: '编码输出…', drawing: '绘制中…',
+    const keys = {
+      parsing: 'phaseParsing', tiles: 'phaseTiles', objects: 'phaseObjects',
+      encoding: 'phaseEncoding', drawing: 'phaseDrawing',
     };
-    return map[p] || p;
+    return keys[p] ? t(keys[p]) : p;
   }
 
   // events
@@ -332,6 +508,6 @@
   });
   els.engine.addEventListener('change', setEngineTag);
 
-  setStatus('ok', '就绪');
-  setEngineTag();
+  setStatus('ok', t('statusReady'));
+  applyLang();
 })();

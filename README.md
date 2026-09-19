@@ -2,6 +2,10 @@
 
 [Red Alert 2 / Yuri's Revenge](http://cncnet.org) 地图渲染器的 TypeScript 移植版。原版为 [ccmaps-net](https://github.com/zzattack/ccmaps-net)（Frank Razenberg / zzattack 使用 C#/.NET 编写），本项目将其移植到 TypeScript / Node.js，并附带一个本地 Web 上传渲染前端。
 
+![CNCMaps TS 界面](docs/screenshot.png)
+
+*完整工作流：上传地图 → 配置渲染参数 → 渲染 → 预览 / 放大查看 / 下载。*
+
 ## 功能
 
 - 解析 `.map` / `.yrm` / `.mpr` 地图文件（Red Alert 2 与 Yuri's Revenge 引擎）

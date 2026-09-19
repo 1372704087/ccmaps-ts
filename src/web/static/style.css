@@ -47,6 +47,9 @@ body{
 .brand-text h1 span{color:var(--accent)}
 .brand-text p{margin:4px 0 0;font-size:14px;line-height:1;color:var(--muted);letter-spacing:.5px}
 .engine-tag{font-size:14px;line-height:1;color:#9fe8c4;background:rgba(56,224,141,.1);border:1px solid rgba(56,224,141,.3);padding:6px 14px;border-radius:999px}
+.topbar-right{display:flex;align-items:center;gap:12px}
+.lang-btn{font-size:14px;line-height:1;color:var(--text);background:rgba(255,255,255,.05);border:1px solid var(--panel-border);padding:6px 14px;border-radius:999px;cursor:pointer;transition:border-color .15s}
+.lang-btn:hover{border-color:var(--accent);color:#fff}
 
 /* ---------- layout ---------- */
 .layout{
@@ -66,8 +69,9 @@ body{
   display:flex;flex-direction:column;
 }
 .panel .maplist{flex:1 1 auto;min-height:0;max-height:none;overflow-y:auto}
-.panel-title{margin:0 0 16px;font-size:13px;font-weight:600;letter-spacing:1px;color:var(--muted);text-transform:uppercase}
-.panel-title span{display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;margin-right:8px;border-radius:6px;background:rgba(56,224,141,.12);color:var(--accent);font-size:11px}
+.panel-title{margin:0 0 16px;font-size:13px;font-weight:600;letter-spacing:2px;color:var(--text);text-transform:uppercase}
+.panel-title span{margin-right:8px}
+.panel-title > span:first-child{display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;border-radius:6px;background:rgba(56,224,141,.12);color:var(--accent);font-size:11px}
 
 .field-label{display:block;font-size:12px;color:var(--muted);margin:6px 0 6px}
 .row{display:flex;gap:8px;margin-bottom:8px}
