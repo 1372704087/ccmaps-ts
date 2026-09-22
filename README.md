@@ -1,6 +1,6 @@
 # CNCMaps TS（TypeScript 移植版）
 
-[Red Alert 2 / Yuri's Revenge](http://cncnet.org) 地图渲染器的 TypeScript 移植版。原版为 [ccmaps-net](https://github.com/zzattack/ccmaps-net)（Frank Razenberg / zzattack 使用 C#/.NET 编写），本项目将其移植到 TypeScript / Node.js，并附带一个本地 Web 上传渲染前端。
+[Red Alert 2 / Yuri's Revenge / Tiberian Sun / Firestorm](http://cncnet.org) 地图渲染器的 TypeScript 移植版。原版为 [ccmaps-net](https://github.com/zzattack/ccmaps-net)（Frank Razenberg / zzattack 使用 C#/.NET 编写），本项目将其移植到 TypeScript / Node.js，并附带一个本地 Web 上传渲染前端。
 
 ![CNCMaps TS 界面](docs/screenshot.png)
 
@@ -8,14 +8,15 @@
 
 ## 功能
 
-- 解析 `.map` / `.yrm` / `.mpr` 地图文件（Red Alert 2 与 Yuri's Revenge 引擎）
+- 解析 `.map` / `.yrm` / `.mpr` 地图文件
+- 支持引擎：Red Alert 2、Yuri's Revenge、Tiberian Sun、Firestorm（TS/FS 为泰伯利亚之日及其资料片火风暴）
 - 从游戏安装目录读取 `.mix`（rules.ini、art.ini、tiles、SHP 动画、VXL 渲染）进行离线渲染
 - 渲染选项：
   - 输出格式 PNG / JPG，可自定义缩放尺寸
   - 出生点标记（红色方块）
   - 矿石 / 宝石高亮
   - 光照
-  - 强制指定引擎（RA2 / YR / 自动侦测）
+  - 强制指定引擎（RA2 / YR / TS / FS / 自动侦测）
 - Web 端「上传地图 → 渲染 → 预览 / 放大查看 / 下载」一站式流程：
   - 服务器内置一份游戏文件，客户端只需上传地图文件，无需本地游戏路径
   - NDJSON 流式渲染进度
@@ -26,7 +27,7 @@
 ### 环境要求
 
 - Node.js 16+
-- 一份 Red Alert 2 / Yuri's Revenge 游戏安装目录（含 `*.mix` 文件）
+- 一份游戏安装目录（含 `*.mix` 文件）：Red Alert 2 / Yuri's Revenge / Tiberian Sun / Firestorm 任一
 
 ### 构建
 
@@ -57,6 +58,8 @@ node dist/cli.js \
 | `-j, --output-jpg` | 输出 JPG |
 | `-y, --force-ra2` | 强制 RA2 引擎 |
 | `-Y, --force-yr` | 强制 YR 引擎 |
+| `-t, --force-ts` | 强制 TS（泰伯利亚之日）引擎 |
+| `-T, --force-fs` | 强制 FS（火风暴）引擎 |
 | `-S, --start-pos-squared` | 出生点方块标记 |
 | `--mark-start-pos` | 启用出生点标记 |
 | `-r, --mark-ore` | 矿石 / 宝石高亮 |
