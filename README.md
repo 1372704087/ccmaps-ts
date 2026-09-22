@@ -80,6 +80,15 @@ $env:CNCMAPS_GAME_DIR = 'C:\path\to\game'
 npm run web
 ```
 
+需要同时支持多个游戏数据目录（例如 RA2/YR 与 TS/FS 分装在不同目录）时，用 `CNCMAPS_GAME_DIRS`，多个目录以分号分隔：
+
+```powershell
+$env:CNCMAPS_GAME_DIRS = 'C:\RA2;D:\TiberianSun'
+npm run web
+```
+
+渲染时这些目录都会作为 `.mix` 数据来源参与查找，引擎由地图或界面选项自动决定使用哪套。
+
 其他可选环境变量：
 
 - `CNCMAPS_WEB_PORT`：服务端口（默认 5173）

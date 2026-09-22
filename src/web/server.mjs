@@ -16,9 +16,15 @@ const STATIC_DIR = path.join(ROOT, 'src', 'web', 'static');
 // are served from an in-memory cache and the file removed right after.
 const SCRATCH_DIR = process.env.CNCMAPS_WEB_SCRATCH || path.join(os.tmpdir(), 'cncmaps-render');
 const UPLOAD_DIR = process.env.CNCMAPS_WEB_UPLOAD || path.join(os.tmpdir(), 'cncmaps-uploads');
-// Server-side game directory (single deployed copy). When set, uploaded-map
-// renders use this as --mixdir; clients never need to supply their own path.
-const GAME_DIR = process.env.CNCMAPS_GAME_DIR || '';
+// Server-side game data directories (deployed copies). When set, uploaded-map
+// renders use them as --mixdir so clients never need to supply their own path.
+// CNCMAPS_GAME_DIRS accepts several dirs separated by ';' (e.g. one per engine:
+// RA2/YR install; TS/FS install). CNCMAPS_GAME_DIR is kept as a single-dir alias.
+const GAME_DIRS = (process.env.CNCMAPS_GAME_DIRS || '')
+  .split(';')
+  .map((s) => s.trim())
+  .filter((s) => s !== '');
+if (GAME_DIRS.length === 0 && process.env.CNCMAPS_GAME_DIR) GAME_DIRS.push(process.env.CNCMAPS_GAME_DIR);
 const CLI_JS = path.join(ROOT, 'dist', 'cli.js');
 const PORT = Number(process.env.CNCMAPS_WEB_PORT || 5173);
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
@@ -123,9 +129,10 @@ function buildArgs(p) {
 
   args.push('--infile=' + infile);
 
-  // mixdir: prefer the single server-side game copy; otherwise accept client dir.
-  const mixdir = GAME_DIR || p.mixdir || '';
-  if (mixdir) args.push('--mixdir=' + mixdir);
+  // mixdir(s): prefer the server-side game copies (one --mixdir per dir);
+  // otherwise accept a client-supplied dir.
+  const dirs = GAME_DIRS.length > 0 ? GAME_DIRS : [p.mixdir || ''].filter((s) => s);
+  for (const d of dirs) args.push('--mixdir=' + d);
 
   const outdir = SCRATCH_DIR;
   fs.mkdirSync(outdir, { recursive: true });

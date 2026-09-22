@@ -144,9 +144,10 @@ export class RenderEngine {
     }
 
     if (/\bmd$/.test(theater.trim()) || found.has('ra2md.mix') || found.has('rulesmd.ini')) return EngineType.YurisRevenge;
+    if (found.has('firestrm.ini')) return EngineType.Firestorm;
     if (found.has('ra2.mix')) return EngineType.RedAlert2;
-    if (found.has('firestrm.ini') || (found.has('patch.mix') || found.has('tibsun.mix'))) return EngineType.Firestorm;
     if (found.has('tibsun.mix')) return EngineType.TiberianSun;
+    if (found.has('patch.mix')) return EngineType.TiberianSun;
     return EngineType.RedAlert2;
   }
 }
