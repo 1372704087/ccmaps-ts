@@ -19,3 +19,6 @@ Thumbs.db
 # Ignore locally generated map caches / temp dirs
 cncmaps-render/
 cncmaps-uploads/
+# Internal porting working notes (kept locally only)
+docs/PORTING.md
+docs/MANIFEST.md
