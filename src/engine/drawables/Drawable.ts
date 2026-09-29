@@ -1,6 +1,6 @@
 // Port of CNCMaps.Engine.Drawables.Drawable
 import { Rectangle, Size } from '../../shared/Geometry.js';
-import { EngineType, LightingType, PaletteType } from '../../shared/Enums.js';
+import { CollectionType, EngineType, LightingType, PaletteType } from '../../shared/Enums.js';
 import type { IniSection } from '../../formats/IniFile.js';
 import { FileFormat } from '../../formats/FileFormat.js';
 import type { ShpFile } from '../../formats/ShpFile.js';
@@ -41,10 +41,14 @@ export abstract class Drawable {
 
   IsRemapable = false;
   InvisibleInGame = false;
+  // The object type has no rules section (e.g. CALOND02, CALA02): the game never creates it, so it
+  // is dropped instead of being drawn as a placeholder slab.
+  IsUndefined = false;
   Foundation = new Size(1, 1);
 
   Overrides = false;
   IsWall = false;
+  IsRock = false;
   IsActualWall = false;
   IsGate = false;
   IsRubble = false;
@@ -52,6 +56,15 @@ export abstract class Drawable {
   IsVeinHoleMonster = false;
   TileElevation = 0;
   Flat = false;
+  // A building's SHP turret: the game draws it as its turret anim (an AnimClass at
+  // TurretAnimZAdjust), so it takes the anim z path, not the body's z-shape.
+  IsTurret = false;
+  // This drawable is an AnimDrawable (AnimClass). AnimClass never carries SHAPE_ZWRITE, so an
+  // anim paints colour without storing depth. Set by AnimDrawable; checked structurally here so
+  // the renderer need not import the drawable subclasses.
+  IsAnim = false;
+  // Anim that takes its building body's z anchor instead of its own drawn bottom row.
+  AnchorToBody = false;
   StartWalkFrame = 0;
   StartStandFrame = 0;
   StandingFrames = 0;
@@ -162,7 +175,7 @@ export abstract class Drawable {
       this.InvisibleInGame = true;
     }
     if (this.Rules.readBool('IsVeins')) {
-      this.Props.LightingType = LightingType.None;
+      this.Props.LightingType = LightingType.Full;
       this.Props.PaletteType = PaletteType.Unit;
       this.IsVeins = true;
       this.Flat = true;
@@ -170,17 +183,26 @@ export abstract class Drawable {
     }
     if (this.Rules.readBool('IsVeinholeMonster')) {
       this.Props.Offset.Y = -49; // why is this needed???
-      this.Props.LightingType = LightingType.None;
+      this.Props.LightingType = LightingType.Full;
+      // VeinholeMonsterClass::Draw_It: ground gradient at -2 - LEVEL_PIXEL_H_1 - height, one level
+      // nearer than the overlays of its cell, so the sprite's own vein-covered floor shows over
+      // the sunken pit's ramp faces and the surrounding pieces still win their ties
+      this.Props.ZAdjust = -this._config.TileHeight / 2;
       this.Props.PaletteType = PaletteType.Unit;
       this.IsVeinHoleMonster = true;
     }
 
+    // TerrainClass::Draw_It adds this straight to the draw point. Only the TS FONA types set it
+    // (YDrawFudge=-12, half a TS tile); RA2 and YR define it nowhere.
+    if (this.OwnerCollection != null && this.OwnerCollection.Type === CollectionType.Terrain)
+      this.Props.Offset.Y += this.Rules.readInt('YDrawFudge');
+
+    this.IsRock = this.Rules.readBool('IsARock');
     if (this.Rules.readString('Land') === 'Rock') {
       this.Props.Offset.Y += this._config.TileHeight / 2;
+      this.IsRock = true;
     } else if (this.Rules.readString('Land') === 'Road') {
       this.Props.Offset.Y += this._config.TileHeight / 2;
-      if (this.Name.toUpperCase().includes('LOBRDG') || this.Name.toUpperCase().includes('LOBRDB'))
-        this.Props.ZAdjust += this._config.TileHeight;
     } else if (this.Rules.readString('Land') === 'Railroad') {
       if (this._config.Engine <= EngineType.Firestorm) this.Props.Offset.Y = 11;
       else this.Props.Offset.Y = 14;
@@ -188,9 +210,13 @@ export abstract class Drawable {
       this.Props.PaletteType = PaletteType.Iso;
     }
     if (this.Rules.readBool('SpawnsTiberium')) {
-      // For example on TIBTRE / Ore Poles
-      this.Props.Offset.Y = -1;
-      this.Props.LightingType = LightingType.None;
+      // TIBTRE / ore poles. TerrainClass::Draw_It sends these through TiberiumDrawer, which
+      // init.cpp aliases to VoxelDrawer (the unit palette), and tints them with the cell's
+      // Brightness rather than its TileBrightness. Brightness carries the ambient without the tile
+      // tint, which is what LightingType.Ambient applies. The draw point is the cell centre raised
+      // by a fixed 16 px (drawpoint -= (0,16)): 4 px up on a 24 px TS tile, 1 px on a 30 px RA2 tile.
+      this.Props.Offset.Y -= 16;
+      this.Props.LightingType = LightingType.Ambient;
       this.Props.PaletteType = PaletteType.Unit;
     }
 

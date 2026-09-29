@@ -5,8 +5,103 @@ import { DrawFrame } from './DrawProperties.js';
 import type { GameObject, OwnableObject } from '../map/GameObjects.js';
 import { OverlayObject } from '../map/GameObjects.js';
 import type { ShpFile } from '../../formats/ShpFile.js';
+import type { Animation } from '../types/Animation.js';
+
+// OptionsClass::Normalize_Delay: Normalized=yes anims scale their per-frame delay by the game speed
+// so their apparent speed stays constant. GameSpeed 0 is fastest (60 fps); the A/B capture pipeline
+// runs with spawn.ini GameSpeed=2, which is the value used here.
+const ANIM_GAME_SPEED = 2;
+const NORMALIZED_DELAY: number[][] = [
+  [2, 2, 1, 1, 1, 1, 1, 1],
+  [3, 3, 3, 2, 2, 2, 1, 1],
+  [5, 4, 4, 3, 3, 2, 2, 1],
+  [7, 6, 5, 4, 4, 4, 3, 2],
+];
+
+// Anims tick this many times during scenario load, before the frame counter a capture reports
+// starts counting. It belongs to the capture setup rather than to the engine: the load runs longer
+// with more players, so the A/B corpus needs 5 with every start position filled and needed 2 with
+// one human against one AI (both from a sweep of --anim-frame over the corpus).
+const ANIM_PHASE = 5;
+
+/// <summary>
+/// Replays gamemd's AnimClass tick logic so a render matches an engine capture whose logic was
+/// frozen at game-loop frame <paramref name="simFrame"/>. Field semantics from the YR binary: Rate
+/// is stored as a delay of 900/Rate game frames per anim frame; End/LoopEnd of 0 mean unset and
+/// resolve against the SHP frame count (halved for Shadow=yes anims, whose second half holds the
+/// shadow frames). RandomRate/RandomLoopDelay roll the game's synced RNG and cannot be replayed;
+/// they are treated as plain Rate with no inter-loop pause. Returns the frame index to draw, or
+/// shpFrames (out of range, skipping the draw) for an animation that has expired by then.
+/// </summary>
+function simulateAnimStage(art: Animation, shpFrames: number, simFrame: number): number {
+  let delay = art.Rate > 0 ? Math.trunc(900 / art.Rate) : 0;
+  if (art.Normalized)
+    delay = delay <= 0 ? 0 : delay < 5 ? NORMALIZED_DELAY[delay - 1][ANIM_GAME_SPEED] : Math.trunc((delay * 8) / (ANIM_GAME_SPEED + 1));
+
+  const bodyFrames = art.Shadow ? Math.trunc(shpFrames / 2) : shpFrames;
+  const end = art.End > 0 ? art.End : bodyFrames;
+  const loopEnd = art.LoopEnd > 0 ? art.LoopEnd : end;
+
+  // the loop count multiplies into a byte in-game; LoopCount=-1 wraps to 0xFF = infinite
+  let loops = art.LoopCount & 0xff;
+  if (loops <= 1) loops = 1;
+  const infinite = loops === 0xff;
+
+  let stage = 0;
+  let step = 1;
+  if (art.Reverse) {
+    stage = loopEnd - 1;
+    step = -1;
+  }
+  if (delay <= 0) return art.Start + stage;
+
+  let started = 0;
+  for (let f = 1; f <= simFrame + ANIM_PHASE; f++) {
+    if (f - started < delay) continue;
+    started = f;
+    stage += step;
+
+    if (art.PingPong) {
+      const atBound = loops > 1 ? stage >= loopEnd - art.Start || stage === art.Start : stage >= end || stage === 0;
+      if (atBound) step = -step;
+      continue;
+    }
+
+    let atEnd = loops > 1 ? stage >= loopEnd - art.Start : stage >= end;
+    if (art.Reverse) atEnd = atEnd || stage <= 0;
+    // Shadow anims wrap at the loop bound even on their last loop, so they never run
+    // into the shadow half
+    else if (!atEnd && art.Shadow) atEnd = stage >= loopEnd - art.Start;
+    if (!atEnd) continue;
+
+    if (!infinite) loops--;
+    if (loops === 0) return shpFrames;
+    stage = art.Reverse ? loopEnd : art.LoopStart - art.Start;
+  }
+  return art.Start + stage;
+}
 
 export class FrameDeciders {
+  /// <summary>The game-loop frame every animation is drawn at when >= 0 (--anim-frame), for
+  /// comparing against an engine capture whose logic was frozen. -1 keeps the live loop deciders.</summary>
+  static AnimSimFrame = -1;
+
+  /// <summary>
+  /// Deterministic replacement for LoopFrameDecider: the frame the game engine shows at
+  /// game-loop frame AnimSimFrame. Pure, so the draw, shadow and bounds passes agree.
+  /// </summary>
+  static AnimTickFrameDecider(animProps: Animation, drawable: { Shp: ShpFile | null }): (obj: GameObject) => number {
+    const simFrame = FrameDeciders.AnimSimFrame;
+    let frame = -1;
+    return () => {
+      if (frame < 0) {
+        drawable.Shp?.Initialize();
+        frame = simulateAnimStage(animProps, drawable.Shp?.NumImages ?? 0, simFrame);
+      }
+      return frame;
+    };
+  }
+
   /// Building turrets
   static TurretFrameDecider = (obj: GameObject): number => {
     const direction = obj instanceof Object && isOwnableLike(obj) ? (obj as OwnableObject).Direction : 0;
@@ -63,6 +158,23 @@ export class FrameDeciders {
   static OverlayValueFrameDecider = (obj: GameObject): number => {
     if (obj instanceof OverlayObject) return obj.OverlayValue;
     else return 0;
+  };
+
+  // CellClass::Draw_Overlay picks one of the four interchangeable full-span frames from this
+  // table so a long bridge does not draw the same image in every cell.
+  private static readonly BridgeVariation = [0, 1, 2, 3, 3, 2, 1, 0, 2, 3, 0, 1, 1, 0, 3, 2];
+
+  /// <summary>
+  /// High bridge decks. Frames 0-3 are the east-west full spans and 9-12 the north-south
+  /// ones; a map stores only the first of each pair and the game varies it by cell position.
+  /// </summary>
+  static HighBridgeFrameDecider = (obj: GameObject): number => {
+    if (!(obj instanceof OverlayObject)) return 0;
+    let frame = obj.OverlayValue;
+    const tile = obj.Tile;
+    if ((frame === 0 || frame === 9) && tile != null)
+      frame += FrameDeciders.BridgeVariation[(tile.Rx & 3) | ((tile.Ry & 3) << 2)];
+    return frame;
   };
 
   /// Parses a mod config FrameDeciderCode expression. Only its linear form

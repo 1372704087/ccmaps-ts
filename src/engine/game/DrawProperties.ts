@@ -1,8 +1,8 @@
 // Port of CNCMaps.Engine.Game.DrawProperties
 import { Point } from '../../shared/Geometry.js';
 import { Palette } from '../../rendering/Palette.js';
-import { LightingType, PaletteType } from '../../shared/Enums.js';
-import { GameObjectLike, OverlayObjectLike } from '../Types.js';
+import { EngineType, LightingType, PaletteType } from '../../shared/Enums.js';
+import { GameObjectLike, InfantryObjectLike, ModConfigLike, OverlayObjectLike } from '../Types.js';
 
 export enum DrawFrame {
   DirectionBased = -1,
@@ -70,6 +70,37 @@ export class DrawProperties {
 }
 
 export class OffsetHacks {
+  // An [Infantry] entry's sub-cell picks one of the engine's StoppingCoordAbs spots, a quarter
+  // cell (64 leptons) off the cell centre. gamemd draws 0 and 1 at the centre, 2 up-right, 3
+  // down-left and 4 down; TS keeps the five-spot table with 1 up-left (OpenTS const.cpp).
+  static InfantrySubCell(config: ModConfigLike): (obj: GameObjectLike) => Point {
+    return (obj: GameObjectLike): Point => {
+      let lx = 0;
+      let ly = 0;
+      switch ((obj as InfantryObjectLike).SubCell ?? 0) {
+        case 1:
+          if (config.Engine <= EngineType.Firestorm) {
+            lx = -64;
+            ly = -64;
+          }
+          break;
+        case 2:
+          lx = 64;
+          ly = -64;
+          break;
+        case 3:
+          lx = -64;
+          ly = 64;
+          break;
+        case 4:
+          lx = 64;
+          ly = 64;
+          break;
+      }
+      return new Point((((lx - ly) * config.TileWidth) / 512) | 0, (((lx + ly) * config.TileHeight) / 512) | 0);
+    };
+  }
+
   static RA2BridgeOffsets(obj: GameObjectLike): Point {
     const bridgeOvl = obj as OverlayObjectLike;
     if (bridgeOvl.OverlayValue <= 8) return new Point(0, -1);

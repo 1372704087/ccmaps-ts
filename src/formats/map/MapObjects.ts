@@ -68,6 +68,7 @@ export class Aircraft extends NamedMapObject {
   Direction = 0;
   OnBridge = false;
   Owner = '';
+  Tag: string | null = null;
 
   constructor(owner: string, name: string, health: number, direction: number, onBridge: boolean) {
     super();
@@ -84,13 +85,16 @@ export class Infantry extends NamedMapObject {
   Direction = 0;
   OnBridge = false;
   Owner = '';
+  SubCell = 0;
+  Tag: string | null = null;
 
-  constructor(owner: string, name: string, health: number, direction: number, onBridge: boolean) {
+  constructor(owner: string, name: string, health: number, direction: number, subCell: number, onBridge: boolean) {
     super();
     this.Owner = owner;
     this.Name = name;
     this.Health = health;
     this.Direction = direction;
+    this.SubCell = subCell;
     this.OnBridge = onBridge;
   }
 }
@@ -129,6 +133,9 @@ export class Structure extends NamedMapObject {
   Upgrade1 = '';
   Upgrade2 = '';
   Upgrade3 = '';
+  Tag: string | null = null;
+  /// <summary>Handed to a starting player by a game-start trigger (see MapFile.ApplyPreCapturedOwners).</summary>
+  PreCaptured = false;
 
   constructor(owner: string, name: string, health: number, direction: number) {
     super();
@@ -151,6 +158,7 @@ export class Unit extends NamedMapObject {
   Direction = 0;
   OnBridge = false;
   Owner = '';
+  Tag: string | null = null;
 
   constructor(owner: string, name: string, health: number, direction: number, onBridge: boolean) {
     super();

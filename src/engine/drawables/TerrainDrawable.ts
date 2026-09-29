@@ -31,8 +31,9 @@ export class TerrainDrawable extends Drawable {
       if (sub instanceof AlphaDrawable) sub.Draw(obj, ds, false);
     }
 
-    if (shadows) this.terrainShp.DrawShadow(obj, ds);
+    // the engine emits body then shadow (0x71c304 / 0x71c34e)
     this.terrainShp.Draw(obj, ds, false);
+    if (shadows) this.terrainShp.DrawShadow(obj, ds);
   }
 
   override GetBounds(obj: GameObject): Rectangle {

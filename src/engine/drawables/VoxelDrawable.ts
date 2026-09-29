@@ -46,7 +46,8 @@ export class VoxelDrawable extends Drawable {
   Draw(obj: GameObject, ds: DrawingSurface, _shadow = true): void {
     if (this.Vxl == null || this.Hva == null) return;
     const gobj = obj as unknown as GameObjectLike;
-    const vxl_ds = VoxelDrawable.VoxelRenderer.Render(this.Vxl, this.Hva, gobj, this.Props);
+    const shadowSection = this.Art != null ? this.Art.readInt('ShadowIndex', 0) : 0;
+    const vxl_ds = VoxelDrawable.VoxelRenderer.Render(this.Vxl, this.Hva, gobj, this.Props, shadowSection);
     if (vxl_ds != null)
       this.BlitVoxelToSurface(ds, vxl_ds, gobj, this.Props, this.Props.Cloakable ? 50 : 0);
   }
@@ -84,33 +85,38 @@ export class VoxelDrawable extends Drawable {
 
     const wHigh = ds.Stride * ds.Height;
     const zBuffer = ds.getZBuffer();
-    const heightBuffer = ds.getHeightBuffer();
     const shadowBufVxl = vxl_ds.getShadows();
-    const shadowBuf = ds.getShadows();
+    const voxelMask = ds.getVoxelMask();
 
-    // the drawn sprite's vertical extent, standing in for the SHP path's shp.Height
     let firstDrawnRow = Number.MAX_VALUE;
-    let lastDrawnRow = Number.MIN_VALUE;
     for (let y = 0; y < vxl_ds.Height; y++) {
       const srcBase = vxl_ds.Stride * y;
       for (let x = 0; x < vxl_ds.Width; x++) {
         if (vxl_ds.data[srcBase + x * 4 + 3] > 0) {
-          if (y < firstDrawnRow) firstDrawnRow = y;
-          lastDrawnRow = y;
+          firstDrawnRow = y;
+          break;
         }
       }
+      if (firstDrawnRow !== Number.MAX_VALUE) break;
     }
-    const vxlHeight = lastDrawnRow >= firstDrawnRow ? lastDrawnRow - firstDrawnRow + 1 : 0;
+    if (firstDrawnRow === Number.MAX_VALUE) return;
 
-    // like the SHP path (ShpRenderer.Draw/DrawShadow): bodies stand vxlHeight
-    // above their tile, shadows lie on the ground plane and may not darken
-    // anything standing taller than that plane -- most notably this unit's own
-    // hull, drawn by an earlier blit of the same UnitDrawable.
-    // flying units (props.FlightHeight) draw their body raised while the shadow
-    // stays on the ground plane beneath them.
+    // gamemd blits the cached voxel through the same Shape_Draw_Z path as SHP objects, with the
+    // Deg90 standing gradient anchored at the bottom row of the region the model's volume projects
+    // to, and BlitterFlags Alpha|Flat: the pixels are z-tested against the buffer but never written
+    // back. Anchoring at the last drawn pixel instead puts a turret whose box reaches under its
+    // geometry behind its own post. Flying bodies draw raised while their z stays anchored at the
+    // ground-projected row.
     const flight = props.FlightHeight;
-    const hBufVal = Math.trunc(obj.Tile.Z * this._config.TileHeight / 2 + vxlHeight + flight);
-    const castHeight = Math.trunc(obj.Tile.Z * this._config.TileHeight / 2);
+    const t = obj.Tile;
+    const cellBottomY = Math.trunc((t.Dy - t.Z) * this._config.TileHeight / 2) + this._config.TileHeight - 1;
+    const anchorY = d.Y + VoxelDrawable.VoxelRenderer.VolumeBottomRow;
+    // ZAdjust uses the game's sign, as in ShpRenderer: positive pushes away from the screen.
+    const zBase0 = Math.trunc((t.Rx + t.Ry) * this._config.TileHeight / 2) + (anchorY - cellBottomY) + 1 - props.ZAdjust;
+    const zShadowBase = Math.trunc((t.Rx + t.Ry) * this._config.TileHeight / 2) + 2;
+    // units on a bridge draw raised; their z stays anchored on the deck plane
+    const onBridge = (obj as unknown as { OnBridge?: boolean }).OnBridge;
+    const zBase = onBridge === true ? zBase0 + Math.trunc((4 * this._config.TileHeight) / 2) : zBase0;
 
     // clip to 25-50-75-100
     transLucency = Math.trunc(transLucency / 25) * 25;
@@ -118,8 +124,7 @@ export class VoxelDrawable extends Drawable {
     const b = 1 - a;
 
     for (let y = 0; y < vxl_ds.Height; y++) {
-      // rows inverted! (vxl surface is stored bottom-up)
-      const srcRowBase = vxl_ds.Stride * (vxl_ds.Height - y - 1);
+      const srcRowBase = vxl_ds.Stride * y;
       const bodyRowBase = (d.Y + y - flight) * ds.Stride + d.X * 3;
       const shadRowBase = (d.Y + y) * ds.Stride + d.X * 3;
       let zIdx = (d.Y + y - flight) * ds.Width + d.X;
@@ -127,11 +132,14 @@ export class VoxelDrawable extends Drawable {
       const shadRowValid = shadRowBase >= 0 && shadRowBase < wHigh;
       if (!bodyRowValid && !shadRowValid) continue;
 
+      const zBufVal = zBase + Math.trunc((anchorY - (d.Y + y - flight)) / 3);
+      const zShadowVal = zShadowBase + (d.Y + y) - cellBottomY;
+
       for (let x = 0; x < vxl_ds.Width; x++) {
         const srcBase = srcRowBase + x * 4;
         const bodyPx = vxl_ds.data[srcBase + 3] > 0;
-        // only non-transparent pixels
-        if (bodyPx && bodyRowValid) {
+        // only non-transparent pixels in front of what the buffer holds
+        if (bodyPx && bodyRowValid && zBufVal > zBuffer[zIdx]) {
           const wIdx = bodyRowBase + x * 3;
           const srcB = vxl_ds.data[srcBase];
           const srcG = vxl_ds.data[srcBase + 1];
@@ -145,21 +153,18 @@ export class VoxelDrawable extends Drawable {
             ds.data[wIdx + 1] = srcG;
             ds.data[wIdx + 2] = srcR;
           }
-
-          const zBufVal = Math.trunc((obj.Tile.Rx + obj.Tile.Ry + obj.Tile.Z) * this._config.TileHeight / 2);
-          if (zBufVal >= zBuffer[zIdx]) zBuffer[zIdx] = zBufVal;
-          heightBuffer[zIdx] = hBufVal;
+          if (voxelMask != null) voxelMask[zIdx] = 1;
         }
-        // shadows fall where the surface has no body pixel; a raised body no
-        // longer occludes its own ground shadow
+        // shadows lie on the caster's ground plane and darken only where that
+        // plane is in front of the buffer; the body pixels drawn by this same
+        // blit keep covering their own shadow
         if ((!bodyPx || flight !== 0) && shadRowValid && shadowBufVxl[x + y * vxl_ds.Width]) {
           const shadIdx = (d.Y + y) * ds.Width + d.X + x;
-          if (!shadowBuf[shadIdx] && castHeight >= heightBuffer[shadIdx]) {
+          if (zShadowVal > zBuffer[shadIdx]) {
             const swIdx = shadRowBase + x * 3;
             ds.data[swIdx] = Math.trunc(ds.data[swIdx] / 2);
             ds.data[swIdx + 1] = Math.trunc(ds.data[swIdx + 1] / 2);
             ds.data[swIdx + 2] = Math.trunc(ds.data[swIdx + 2] / 2);
-            shadowBuf[shadIdx] = 1;
           }
         }
         zIdx++;

@@ -41,7 +41,7 @@ export class TmpRenderer {
     const zBuffer = ds.getZBuffer();
     const heightBuffer = ds.getHeightBuffer();
     const p = tile.Palette;
-    const bgr = p.getBgrBytes();
+    let bgr = p.getBgrBytes();
     const zData = img.ZData;
     const zBase = Math.trunc((tile.Rx + tile.Ry) * tmp.BlockHeight / 2);
     const hBufVal = Math.trunc(tile.Z * this.config.TileHeight / 2);
@@ -78,17 +78,21 @@ export class TmpRenderer {
     let zIdx = offset.Y * ds.Width + offset.X + halfCx - 2;
     let cx = 0; // Amount of pixel to copy
 
+    // like the game (Blit_Iso_Tile): a tile without a z-data section draws without
+    // touching the z-buffer, so its pixels stay "far" and never occlude anything
+    const useZ = zData != null;
+
     for (; y < halfCy; y++) {
       cx += 4;
       for (let c = 0; c < cx; c++) {
         const paletteValue = img.TileData[rIdx];
-        const zBufVal = zBase - (zData != null ? zData[rIdx] : 0);
-        if (paletteValue !== 0 && w >= 0 && w < wHigh && zBufVal >= zBuffer[zIdx]) {
+        const zBufVal = zBase - (useZ ? zData[rIdx] : 0);
+        if (paletteValue !== 0 && w >= 0 && w < wHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
           const ci = paletteValue * 3;
           data[w] = bgr[ci];
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
-          zBuffer[zIdx] = zBufVal;
+          if (useZ) zBuffer[zIdx] = zBufVal;
           heightBuffer[zIdx] = hBufVal;
         }
         w += 3;
@@ -105,13 +109,13 @@ export class TmpRenderer {
       cx -= 4;
       for (let c = 0; c < cx; c++) {
         const paletteValue = img.TileData[rIdx];
-        const zBufVal = zBase - (zData != null ? zData[rIdx] : 0);
-        if (paletteValue !== 0 && w >= 0 && w < wHigh && zBufVal >= zBuffer[zIdx]) {
+        const zBufVal = zBase - (useZ ? zData[rIdx] : 0);
+        if (paletteValue !== 0 && w >= 0 && w < wHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
           const ci = paletteValue * 3;
           data[w] = bgr[ci];
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
-          zBuffer[zIdx] = zBufVal;
+          if (useZ) zBuffer[zIdx] = zBufVal;
           heightBuffer[zIdx] = hBufVal;
         }
         w += 3;
@@ -124,6 +128,8 @@ export class TmpRenderer {
 
     if (!img.hasExtraData) return; // we're done now
     const xzData = img.ExtraZData;
+    // the game lights a tunnel roof as the plateau it belongs to, not the tunnel floor
+    if (tile.ExtraPalette != null) bgr = tile.ExtraPalette.getBgrBytes();
 
     offset.X += img.ExtraX - img.X;
     offset.Y += img.ExtraY - img.Y;

@@ -2,6 +2,7 @@
 import { Color } from '../shared/Geometry.js';
 import { PalFile } from '../formats/PalFile.js';
 import { Lighting } from '../formats/map/Lighting.js';
+import { HsvColor } from '../engine/utility/HsvColor.js';
 
 // Structural type for the light-source used in ApplyLamp; the concrete
 // LightSource class lives in the GameObjects module. Kept as an interface to
@@ -14,6 +15,10 @@ export interface LightSourceLike {
 }
 
 export class Palette {
+  /** Quantize lighting to the 63 intensity steps the engine draws through. Always on for a
+   * render; kept as a switch so a render can be compared against the continuous maths. */
+  static QuantizeIntensity = false;
+
   Name = '';
   Colors: Color[] = new Array(256).fill(null).map(() => new Color(0, 0, 0, 0));
   IsShared = false;
@@ -89,6 +94,11 @@ export class Palette {
     }
   }
 
+  /** Adds a flat intensity, in the game's per-mille units divided by 1000. */
+  addLight(intensity: number): void {
+    this.ambientMult += intensity;
+  }
+
   private loadOriginalColors(): void {
     if (!this.originalColorsLoaded && this.originalPalette != null) {
       this.origColors = this.originalPalette.getOriginalColors();
@@ -96,27 +106,60 @@ export class Palette {
     }
   }
 
+  // The engine does not scale colors by the light level. It draws every shape through a
+  // LightConvertClass whose table holds 63 intensity steps from black to double brightness, and
+  // the cell's brightness picks one of them, so a cell's lighting always lands on a multiple of
+  // 1/31. The chain below is the game's own: Draw_Tile hands the brightness to
+  // AlphaLightingRemapClass::Get_Table, whose row index is (261*brightness)>>11, and the table
+  // entry is (alpha * shade * 62) / 32258 with alpha at its neutral 127. RA2 and YR use the same
+  // machinery.
+  private static quantizeTsIntensity(intensity: number): number {
+    let brightness = Math.trunc(intensity * 1000);
+    if (brightness < 0) brightness = 0;
+    if (brightness > 2000) brightness = 2000;
+    const shade = Math.min(254, (261 * brightness) >> 11);
+    const level = Math.min(62, Math.trunc((127 * shade * 62) / 32258));
+    return level / 31.0;
+  }
+
   recalculate(): void {
     if (!this.originalColorsLoaded) this.loadOriginalColors();
     if (!this.originalColorsLoaded) return;
 
-    const clipMult = Number.MAX_VALUE;
-    this.ambientMult = Math.min(Math.max(this.ambientMult, 0), clipMult);
-    this.redMult = Math.min(Math.max(this.redMult, 0), clipMult);
-    this.greenMult = Math.min(Math.max(this.greenMult, 0), clipMult);
-    this.blueMult = Math.min(Math.max(this.blueMult, 0), clipMult);
+    // gamemd (CellClass::ComputeLighting 0x484180, normalize 0x5558E0): the ambient sum and each
+    // tint sum clamp to [0,2]; the tint triple is normalized so its max channel becomes 1, the max
+    // goes into the intensity, and that clamps to [0,2] again. Without a binding clamp this is the
+    // plain per-channel product; the clamps cap the dominant channel's gain at 2x, which keeps
+    // stacked or negative lamps from discoloring.
+    const amb = Math.min(Math.max(this.ambientMult, 0), 2.0);
+    const tr = Math.min(Math.max(this.redMult, 0), 2.0);
+    const tg = Math.min(Math.max(this.greenMult, 0), 2.0);
+    const tb = Math.min(Math.max(this.blueMult, 0), 2.0);
+    const m = Math.max(tr, Math.max(tg, tb));
+    let rmult: number;
+    let gmult: number;
+    let bmult: number;
+    if (m < 0.001) {
+      rmult = gmult = bmult = 0;
+    } else {
+      let intensity = Math.min(amb * m, 2.0);
+      if (Palette.QuantizeIntensity) intensity = Palette.quantizeTsIntensity(intensity);
+      rmult = intensity * (tr / m);
+      gmult = intensity * (tg / m);
+      bmult = intensity * (tb / m);
+    }
 
     const orig = this.origColors!;
     for (let i = 0; i < 256; i++) {
-      let rmult = this.ambientMult * this.redMult;
-      let gmult = this.ambientMult * this.greenMult;
-      let bmult = this.ambientMult * this.blueMult;
+      let rm = rmult;
+      let gm = gmult;
+      let bm = bmult;
       if (i >= 240 && i <= 254 && this.isObjectPalette) {
-        rmult = gmult = bmult = 1.0;
+        rm = gm = bm = 1.0;
       }
-      const r = Math.min(255, (orig[i * 3 + 0] * rmult) / 63.0 * 255.0);
-      const g = Math.min(255, (orig[i * 3 + 1] * gmult) / 63.0 * 255.0);
-      const b = Math.min(255, (orig[i * 3 + 2] * bmult) / 63.0 * 255.0);
+      const r = Math.min(255, (orig[i * 3 + 0] * rm) / 63.0 * 255.0);
+      const g = Math.min(255, (orig[i * 3 + 1] * gm) / 63.0 * 255.0);
+      const b = Math.min(255, (orig[i * 3 + 2] * bm) / 63.0 * 255.0);
       this.Colors[i] = new Color(r, g, b);
     }
     this.bgr = null;
@@ -142,19 +185,46 @@ export class Palette {
     return p;
   }
 
-  remap(color: Color): void {
+  // The 16 remap shades a house colour gets, in palette indices 16-31. gamemd builds them at
+  // 0x0068C3B0: the colour's hue is kept, its saturation swept up a sine and its value swept
+  // down a cosine, so a shade grows more saturated as it darkens. Both sweeps end at pi/2, so
+  // shade 15 is black. The angles are the binary's own doubles; in degrees they run 20 + 14i/3
+  // for the value, overridden to 11.25 at i=0, and 50 + 8i/3 for the saturation.
+  remap(color: HsvColor): void {
     if (!this.originalColorsLoaded) this.loadOriginalColors();
-    const mults = [
-      0xfc >> 2, 0xec >> 2, 0xdc >> 2, 0xd0 >> 2,
-      0xc0 >> 2, 0xb0 >> 2, 0xa4 >> 2, 0x94 >> 2,
-      0x84 >> 2, 0x78 >> 2, 0x68 >> 2, 0x58 >> 2,
-      0x4c >> 2, 0x3c >> 2, 0x2c >> 2, 0x20 >> 2,
-    ];
+
     const orig = this.origColors!;
-    for (let i = 16; i < 32; i++) {
-      orig[i * 3 + 0] = Math.trunc((color.R / 255.0) * mults[i - 16]);
-      orig[i * 3 + 1] = Math.trunc((color.G / 255.0) * mults[i - 16]);
-      orig[i * 3 + 2] = Math.trunc((color.B / 255.0) * mults[i - 16]);
+    for (let i = 0; i < 16; i++) {
+      const value = i === 0 ? 0.19634954084936207 : i * 0.08144869842640204 + 0.3490658503988659;
+      const saturation = i * 0.046542113386515455 + 0.8726646259971648;
+      const shade = Palette.engineHsvToRgb(
+        color.Hue,
+        Math.trunc(Math.sin(saturation) * color.Saturation),
+        Math.trunc(Math.cos(value) * color.Value),
+      );
+      // The palette is six bit; the engine's conversion hands back eight.
+      orig[(16 + i) * 3 + 0] = Math.trunc((shade.R * 63) / 255);
+      orig[(16 + i) * 3 + 1] = Math.trunc((shade.G * 63) / 255);
+      orig[(16 + i) * 3 + 2] = Math.trunc((shade.B * 63) / 255);
+    }
+  }
+
+  // The engine's own HSV conversion (0x00517440), not the floating point one on HsvColor: it
+  // splits the hue on 255 rather than 256 or 360 and truncates every intermediate, which moves
+  // a shade a unit or two against a textbook conversion.
+  private static engineHsvToRgb(h: number, s: number, v: number): Color {
+    const sector = Math.trunc((h * 6) / 255);
+    const frac = (h * 6) % 255;
+    const p = Math.trunc(((255 - s) * v) / 255);
+    const q = Math.trunc(((255 - Math.trunc((frac * s) / 255)) * v) / 255);
+    const t = Math.trunc(((255 - Math.trunc(((255 - frac) * s) / 255)) * v) / 255);
+    switch (sector) {
+      case 1: return Color.FromRgb(q, v, p);
+      case 2: return Color.FromRgb(p, v, t);
+      case 3: return Color.FromRgb(p, q, v);
+      case 4: return Color.FromRgb(t, p, v);
+      case 5: return Color.FromRgb(v, p, q);
+      default: return Color.FromRgb(v, t, p); // 0, and 6 when the hue is 255
     }
   }
 

@@ -30,6 +30,7 @@ export interface MapTileLike {
   Ry: number;
   SubTile: number;
   Palette: Palette;
+  ExtraPalette: Palette | null;
   Layer: TileLayerLike;
   Drawable: DrawableLike | null;
 }
@@ -47,6 +48,12 @@ export interface DrawableLike {
   TileElevation: number;
   Flat: boolean;
   IsBuildingPart: boolean;
+  IsWall: boolean;
+  IsRock: boolean;
+  IsTurret: boolean;
+  IsVeinHoleMonster: boolean;
+  IsAnim: boolean;
+  AnchorToBody: boolean;
 }
 
 export interface TileDrawableLike extends DrawableLike {
@@ -63,14 +70,21 @@ export interface GameObjectLike {
 
 export interface StructureObjectLike extends GameObjectLike {
   WallBuildingFrame: number;
+  DrawnBodyAnchorY: number | null;
 }
 
 export interface OverlayObjectLike extends GameObjectLike {
   OverlayValue: number;
+  WallBuildingFrame: number;
+}
+
+export interface InfantryObjectLike extends GameObjectLike {
+  SubCell: number;
 }
 
 export interface OwnableObjectLike {
   Direction: number;
+  OnBridge: boolean;
 }
 
 export interface ModConfigLike {

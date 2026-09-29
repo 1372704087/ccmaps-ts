@@ -1,4 +1,4 @@
-// Port of CNCMaps.Engine.Game.ObjectCollection
+﻿// Port of CNCMaps.Engine.Game.ObjectCollection
 import type { IniFile, IniSection } from '../../formats/IniFile.js';
 import { VirtualFileSystem } from '../../formats/vfs/index.js';
 import { ModConfig } from '../../shared/ModConfig.js';
@@ -67,6 +67,9 @@ export class ObjectCollection extends GameCollection {
 
   protected override MakeDrawable(objName: string): Drawable {
     let drawable: Drawable;
+    // anims are defined in the art ini and have no rules section to check
+    const isUndefined =
+      this.Type !== CollectionType.Animation && this.Rules.getSection(objName) == null;
     const rulesSection = this.Rules.getOrCreateSection(objName);
     const artSectionName = rulesSection.readString('Image', objName);
     const artSection = this.Art.getOrCreateSection(artSectionName);
@@ -93,6 +96,7 @@ export class ObjectCollection extends GameCollection {
       default:
         throw new RangeError('Invalid enum value for CollectionType');
     }
+    drawable.IsUndefined = isUndefined;
     return drawable;
   }
 
@@ -193,6 +197,14 @@ export class ObjectCollection extends GameCollection {
     this.InitDrawableDefaults(drawable);
     drawable.LoadFromRules();
 
+    // Infantry draw from the name rules' Image= resolves the art section to, never from an Image=
+    // inside that art section: gamemd renders CAML as a camel although artmd's [CAML] carries
+    // Image=JOSH.
+    if (this.Type === CollectionType.Infantry) {
+      drawable.Image = drawable.Art != null ? drawable.Art.Name : drawable.Image;
+      drawable.Props.OffsetHack = drawable.Props.ShadowOffsetHack = OffsetHacks.InfantrySubCell(this._config);
+    }
+
     const shpFile = drawable.GetFilename();
     drawable.Shp = this._vfs.open(shpFile, FileFormat.Shp) as ShpFile | null;
 
@@ -222,9 +234,14 @@ export class ObjectCollection extends GameCollection {
         props.FrameDecider = FrameDeciders.OverlayValueFrameDecider as unknown as (obj: GameObjectLike) => number;
         props.PaletteType = PaletteType.Overlay;
         props.LightingType = LightingType.None;
+        // The game draws tiberium in its own pass with its own anchor, 3 pixels lower than the
+        // centred-canvas placement of the other overlays. Uniform over ore, gems and Vinifera, all 12
+        // pool images and all four theaters.
+        props.Offset.Offset(0, 3);
       } else if (SpecialOverlays.IsHighBridge(ovl)) {
         props.OffsetHack = OffsetHacks.RA2BridgeOffsets;
         props.ShadowOffsetHack = OffsetHacks.RA2BridgeShadowOffsets;
+        props.FrameDecider = FrameDeciders.HighBridgeFrameDecider as unknown as (obj: GameObjectLike) => number;
         drawable.TileElevation = 4; // for lighting
         drawable.Foundation = new Size(3, 1); // ensures they're drawn later --> fixes overlap
       }
@@ -237,6 +254,7 @@ export class ObjectCollection extends GameCollection {
       } else if (SpecialOverlays.IsHighBridge(ovl) || SpecialOverlays.IsTSHighRailsBridge(ovl)) {
         props.OffsetHack = OffsetHacks.TSBridgeOffsets;
         props.ShadowOffsetHack = OffsetHacks.TSBridgeShadowOffsets;
+        props.FrameDecider = FrameDeciders.HighBridgeFrameDecider as unknown as (obj: GameObjectLike) => number;
         drawable.TileElevation = 4; // for lighting
       }
     }

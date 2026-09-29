@@ -47,6 +47,10 @@ export abstract class GameCollection {
     return sub;
   }
 
+  get DrawableCount(): number {
+    return this._drawables.length;
+  }
+
   GetDrawable(o: GameObject): Drawable | null;
   GetDrawable(name: string): Drawable | null;
   GetDrawable(index: number): Drawable;
@@ -77,7 +81,8 @@ export abstract class GameCollection {
   }
 
   HasObject(o: GameObject): boolean {
-    return this.GetDrawable(o) != null;
+    const d = this.GetDrawable(o);
+    return d != null && !d.IsUndefined;
   }
 
   protected abstract MakeDrawable(objName: string): Drawable;

@@ -7,7 +7,7 @@ import type { ShpFile } from '../../formats/ShpFile.js';
 import { VirtualFileSystem } from '../../formats/vfs/index.js';
 import { ModConfig } from '../../shared/ModConfig.js';
 import type { GameObject, OwnableObject } from '../map/GameObjects.js';
-import { OverlayObject } from '../map/GameObjects.js';
+import { OverlayObject, StructureObject } from '../map/GameObjects.js';
 import { TileDirection } from '../map/TileLayer.js';
 import type { DrawingSurface } from '../../rendering/DrawingSurface.js';
 import { ShpRenderer } from '../../rendering/ShpRenderer.js';
@@ -72,7 +72,7 @@ export class ShpDrawable extends Drawable {
 
     this.Props.Offset.Offset(onBridgeOffset.Width, onBridgeOffset.Height);
     if (this.Props.HasShadow && shadow && !this.Props.Cloakable)
-      this._renderer.DrawShadow(obj as unknown as GameObjectLike, this.Shp, this.Props, ds);
+      this._renderer.DrawShadow(obj as unknown as GameObjectLike, this.ShadowShp(obj), this, this.Props, ds);
     this._renderer.Draw(this.Shp, obj as unknown as GameObjectLike, this, this.Props, ds, this.Props.Cloakable ? 50 : 0);
     this.Props.Offset.Offset(-onBridgeOffset.Width, -onBridgeOffset.Height);
 
@@ -101,7 +101,38 @@ export class ShpDrawable extends Drawable {
   override DrawShadow(obj: GameObject, ds: DrawingSurface): void {
     if (this.InvisibleInGame || this.Shp == null) return;
     if (this.Props.HasShadow && !this.Props.Cloakable)
-      this._renderer.DrawShadow(obj as unknown as GameObjectLike, this.Shp, this.Props, ds);
+      this._renderer.DrawShadow(obj as unknown as GameObjectLike, this.ShadowShp(obj), this, this.Props, ds);
+  }
+
+  // CellClass::Draw_Overlay_Shadow reads OverlayTypes[Overlay] back directly, so tiberium
+  // casts the shadow of the id the map stored even though its body comes from the pooled art.
+  private ShadowShp(obj: GameObject): ShpFile {
+    const stored = obj instanceof OverlayObject ? (obj.StoredDrawable as ShpDrawable | null) : null;
+    return (stored != null ? stored.Shp : null) ?? this.Shp!;
+  }
+
+  /**
+   * Screen row of this shape's drawn bottom for the given object, or null when no drawable frame
+   * exists. Mirrors the offset math in ShpRenderer.Draw.
+   */
+  GetDrawnBottomY(obj: GameObject): number | null {
+    if (this.Shp == null) return null;
+    this.Shp.Initialize();
+    let frameIndex = this.Props.FrameDecider != null ? this.Props.FrameDecider(obj as unknown as GameObjectLike) : 0;
+    if (obj.Drawable != null && (obj.Drawable.IsActualWall || obj.Drawable.IsWall))
+      frameIndex = (obj as unknown as { WallBuildingFrame: number }).WallBuildingFrame;
+    if (frameIndex < 0 || frameIndex >= this.Shp.Images.length) return null;
+    const img = this.Shp.getImage(frameIndex);
+    if (img == null || img.Height === 0) return null;
+    const tile = obj.Tile!;
+    return (
+      this.Props.GetOffset(obj as unknown as GameObjectLike).Y +
+      Math.trunc(((tile.Dy - tile.Z) * this._config.TileHeight) / 2) -
+      Math.trunc(this.Shp.Height / 2) +
+      img.Y +
+      img.Height -
+      1
+    );
   }
 
   override GetBounds(obj: GameObject): Rectangle {

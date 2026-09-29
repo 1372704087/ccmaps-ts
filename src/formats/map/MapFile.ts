@@ -20,6 +20,17 @@ import {
   TunnelLine,
 } from './MapObjects.js';
 
+/// <summary>Decodes a base64 pack section. Some map editors leave a stray character or bad
+/// padding at the end; the game ignores that, so this decodes the largest valid prefix.</summary>
+function decodePackBase64(s: string): Buffer {
+  const clean = s.replace(/\s+/g, '');
+  if (/^[A-Za-z0-9+/]*={0,2}$/.test(clean) && clean.length % 4 === 0)
+    return Buffer.from(clean, 'base64');
+  let body = clean.replace(/=+$/, '');
+  body = body.slice(0, body.length - (body.length % 4));
+  return Buffer.from(body, 'base64');
+}
+
 /// <summary>Map file.</summary>
 export class MapFile extends IniFile {
   FullSize = Rectangle.Empty;
@@ -108,7 +119,7 @@ export class MapFile extends IniFile {
       logger.warn('IsoMapPack5 section unavailable, tiles will be empty');
       return;
     }
-    const lzoData = Buffer.from(mapSection.concatenatedValues(), 'base64');
+    const lzoData = decodePackBase64(mapSection.concatenatedValues());
     const cells = (this.FullSize.Width * 2 - 1) * this.FullSize.Height;
     const lzoPackSize = cells * 11 + 4; // last 4 bytes contains a lzo pack header saying no more data is left
 
@@ -153,6 +164,7 @@ export class MapFile extends IniFile {
       return v;
     };
     let numtiles = 0;
+    let outOfBounds = 0;
     for (let i = 0; i < cells; i++) {
       const rx = readUInt16();
       const ry = readUInt16();
@@ -167,13 +179,15 @@ export class MapFile extends IniFile {
         const dx = rx - ry + this.FullSize.Width - 1;
         const dy = rx + ry - this.FullSize.Width - 1;
         numtiles++;
-        if (dx >= 0 && dx < 2 * this.Tiles.Width && dy >= 0 && dy < 2 * this.Tiles.Height) {
+        // the tile array is (2 * Width - 1) x Height, indexed [dx, dy / 2]
+        if (dx >= 0 && dx < 2 * this.Tiles.Width - 1 && dy >= 0 && dy < 2 * this.Tiles.Height) {
           const tile = new IsoTile(dx, dy, rx, ry, z, tilenum, subtile, icegrowth);
           this.Tiles.set(dx, Math.trunc(dy / 2), tile);
-        }
+        } else outOfBounds++;
       }
     }
 
+    if (outOfBounds > 0) logger.warn(`Ignored ${outOfBounds} tile entries outside map bounds`);
     logger.debug(`Read ${numtiles} tiles`);
   }
 
@@ -225,7 +239,7 @@ export class MapFile extends IniFile {
     }
 
     const overlayPack = new Uint8Array(1 << 18);
-    Format5.DecodeInto(Buffer.from(overlaySection.concatenatedValues(), 'base64'), overlayPack, 80);
+    Format5.DecodeInto(decodePackBase64(overlaySection.concatenatedValues()), overlayPack, 80);
 
     const overlayDataSection = this.getSection('OverlayDataPack');
     if (overlayDataSection == null) {
@@ -233,7 +247,7 @@ export class MapFile extends IniFile {
       return;
     }
     const overlayDataPack = new Uint8Array(1 << 18);
-    Format5.DecodeInto(Buffer.from(overlayDataSection.concatenatedValues(), 'base64'), overlayDataPack, 80);
+    Format5.DecodeInto(decodePackBase64(overlayDataSection.concatenatedValues()), overlayDataPack, 80);
 
     for (let y = 0; y < this.FullSize.Height; y++) {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x--) {
@@ -270,9 +284,11 @@ export class MapFile extends IniFile {
         const health = parseInt(entries[2], 10);
         const rx = parseInt(entries[3], 10);
         const ry = parseInt(entries[4], 10);
-        const direction = parseInt(entries[7], 10);
+        const subCell = parseInt(entries[5], 10);
+        const direction = parseInt(entries[7], 10) & 0xff; // the game stores facings as a byte
         const onBridge = entries[11] === '1';
-        const i = new Infantry(owner, name, health, direction, onBridge);
+        const i = new Infantry(owner, name, health, direction, subCell, onBridge);
+        i.Tag = MapFile.readTag(entries, 8);
         i.Tile = this.Tiles.getTileR(rx, ry);
         if (i.Tile != null) this.Infantries.push(i);
       } catch {
@@ -299,9 +315,10 @@ export class MapFile extends IniFile {
         const health = parseInt(entries[2], 10);
         const rx = parseInt(entries[3], 10);
         const ry = parseInt(entries[4], 10);
-        const direction = parseInt(entries[5], 10);
+        const direction = parseInt(entries[5], 10) & 0xff; // the game stores facings as a byte
         const onBridge = entries[10] === '1';
         const u = new Unit(owner, name, health, direction, onBridge);
+        u.Tag = MapFile.readTag(entries, 7);
         u.Tile = this.Tiles.getTileR(rx, ry);
         if (u.Tile != null) this.Units.push(u);
       } catch {
@@ -326,9 +343,10 @@ export class MapFile extends IniFile {
         const health = parseInt(entries[2], 10);
         const rx = parseInt(entries[3], 10);
         const ry = parseInt(entries[4], 10);
-        const direction = parseInt(entries[5], 10);
+        const direction = parseInt(entries[5], 10) & 0xff; // the game stores facings as a byte
         const onBridge = entries[entries.length - 4] === '1';
         const a = new Aircraft(owner, name, health, direction, onBridge);
+        a.Tag = MapFile.readTag(entries, 7);
         a.Tile = this.Tiles.getTileR(rx, ry);
         if (a.Tile != null) this.Aircrafts.push(a);
       } catch {
@@ -354,8 +372,9 @@ export class MapFile extends IniFile {
         const health = parseInt(entries[2], 10);
         const rx = parseInt(entries[3], 10);
         const ry = parseInt(entries[4], 10);
-        const direction = parseInt(entries[5], 10);
+        const direction = parseInt(entries[5], 10) & 0xff; // the game stores facings as a byte
         const s = new Structure(owner, name, health, direction);
+        s.Tag = MapFile.readTag(entries, 6);
         s.Upgrade1 = entries[12];
         s.Upgrade2 = entries[13];
         s.Upgrade3 = entries[14];
@@ -424,6 +443,137 @@ export class MapFile extends IniFile {
       }
     }
     logger.trace(`Read ${this.TunnelEntries.length} tunnel entries`);
+  }
+
+  private static readonly PlayerAtStartHouse = 4475;
+
+  /// <summary>The trigger tag in an object's line, or null when it carries none.</summary>
+  private static readTag(entries: string[], index: number): string | null {
+    if (entries.length <= index) return null;
+    const tag = entries[index].trim();
+    return tag.length === 0 || tag.toLowerCase() === 'none' ? null : tag;
+  }
+
+  /// <summary>Tag id -> the start slot whose player a game-start trigger hands the tagged objects
+  /// to, for every tag that carries one.
+  ///
+  /// [Tags] TagID=Repeat,Name,TriggerID -> [Triggers] TrigID=House,Attached,Name,Disabled,...
+  /// -> [Actions] TrigID=Count, then Count groups of eight ActionID,P1..P6,Waypoints. Action 14
+  /// is "Change House" and its house parameter P2 is 4475+N for "Player @ A".."H", the player who
+  /// spawns at start waypoint N. A slot nobody occupies makes the action a no-op in the game, so
+  /// the last action naming an available slot wins.</summary>
+  static ResolveTagOwnerSlots(ini: IniFile, slotAvailable: boolean[]): Map<string, number> {
+    const byTag = new Map<string, number>();
+    const tags = ini.getSection('Tags');
+    const triggers = ini.getSection('Triggers');
+    const actions = ini.getSection('Actions');
+    const events = ini.getSection('Events');
+    if (tags == null || triggers == null || actions == null) return byTag;
+
+    // Trigger id -> slot, for the triggers that hand objects to a starting player.
+    const byTrigger = new Map<string, number>();
+    for (const entry of actions.OrderedEntries) {
+      const f = entry.Value.toString().split(',');
+      const count = f.length === 0 ? NaN : parseInt(f[0], 10);
+      if (Number.isNaN(count)) continue;
+      let slot = -1;
+      for (let i = 0; i < count; i++) {
+        const g = 1 + i * 8;
+        if (g + 8 > f.length) break;
+        if (f[g].trim() !== '14') continue;
+        const house = parseInt(f[g + 2].trim(), 10);
+        if (Number.isNaN(house)) continue;
+        const n = house - MapFile.PlayerAtStartHouse;
+        if (n >= 0 && n < slotAvailable.length && slotAvailable[n]) slot = n;
+      }
+      if (slot >= 0) byTrigger.set(entry.Key, slot);
+    }
+
+    for (const entry of tags.OrderedEntries) {
+      const f = entry.Value.toString().split(',');
+      if (f.length < 3) continue;
+      const slot = byTrigger.get(f[2].trim());
+      if (slot === undefined) continue;
+      // Field 3 is Disabled. An empty read also lands here when the trigger id is not in [Triggers]
+      // at all, which is the wanted result.
+      const trigger = triggers.readString(f[2].trim()).split(',');
+      if (trigger.length < 4 || trigger[3].trim() === '1') continue;
+      if (events != null && MapFile.isDelayed(events.readString(f[2].trim()))) continue;
+      byTag.set(entry.Key, slot);
+    }
+    return byTag;
+  }
+
+  /// <summary>Whether a trigger waits on the clock. [Events] is Count, then per event
+  /// EventID,ArgFlag,Arg; ArgFlag 2 means two args follow, so the list has to be walked rather
+  /// than chunked. Event 13 is "Elapsed Time"; with a non-zero argument the hand-over has not
+  /// happened yet at the moment we render.</summary>
+  private static isDelayed(eventList: string): boolean {
+    const f = eventList.split(',');
+    const count = f.length === 0 ? NaN : parseInt(f[0], 10);
+    if (Number.isNaN(count)) return false;
+    let i = 1;
+    for (let n = 0; n < count && i + 2 < f.length + 1; n++) {
+      const id = parseInt(f[i].trim(), 10);
+      const argFlag = parseInt(f[i + 1].trim(), 10);
+      if (Number.isNaN(id) || Number.isNaN(argFlag)) return false;
+      const args = argFlag === 2 ? 2 : 1;
+      if (i + 2 + args > f.length) return false;
+      if (id === 13) {
+        const delay = parseInt(f[i + 2].trim(), 10);
+        if (Number.isNaN(delay) || delay !== 0) return true;
+      }
+      i += 2 + args;
+    }
+    return false;
+  }
+
+  /// <summary>Rewrites the owner of every object a game-start trigger hands to a starting
+  /// player. slotOwners[N] is the owner name for start position N, null when nobody starts
+  /// there. Returns the number of objects changed.</summary>
+  ApplyPreCapturedOwners(slotOwners: (string | null)[]): number {
+    // Only multiplayer maps: on a campaign map the waypoints are script positions, not
+    // start positions, and "Player @ A" resolves to nothing.
+    const basic = this.getSection('Basic');
+    if (basic == null || !basic.readBool('MultiplayerOnly')) return 0;
+
+    // Read [Waypoints] straight from the ini: ReadWaypoints has its own gate, and a slot
+    // with no start position is one the game leaves neutral.
+    const waypoints = this.getSection('Waypoints');
+    const available: boolean[] = [];
+    for (let i = 0; i < slotOwners.length; i++)
+      available.push(
+        slotOwners[i] != null && slotOwners[i] !== '' && waypoints != null && waypoints.hasKey(i.toString()),
+      );
+
+    const slots = MapFile.ResolveTagOwnerSlots(this, available);
+    if (slots.size === 0) return 0;
+
+    let changed = 0;
+    for (const o of this.Structures)
+      if (o.Tag != null && slots.has(o.Tag)) {
+        o.Owner = slotOwners[slots.get(o.Tag)!]!;
+        o.PreCaptured = true;
+        changed++;
+      }
+    for (const o of this.Infantries)
+      if (o.Tag != null && slots.has(o.Tag)) {
+        o.Owner = slotOwners[slots.get(o.Tag)!]!;
+        changed++;
+      }
+    for (const o of this.Units)
+      if (o.Tag != null && slots.has(o.Tag)) {
+        o.Owner = slotOwners[slots.get(o.Tag)!]!;
+        changed++;
+      }
+    for (const o of this.Aircrafts)
+      if (o.Tag != null && slots.has(o.Tag)) {
+        o.Owner = slotOwners[slots.get(o.Tag)!]!;
+        changed++;
+      }
+
+    logger.debug(`Pre-captured ${changed} objects from ${slots.size} tagged triggers`);
+    return changed;
   }
 }
 

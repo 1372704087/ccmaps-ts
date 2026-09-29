@@ -21,14 +21,7 @@ import { Drawable } from './Drawable.js';
 import { ShpDrawable } from './ShpDrawable.js';
 import { VoxelDrawable } from './VoxelDrawable.js';
 import { AnimDrawable } from './AnimDrawable.js';
-
-const LampNames = [
-  'REDLAMP', 'BLUELAMP', 'GRENLAMP', 'YELWLAMP', 'PURPLAMP', 'INORANLAMP', 'INGRNLMP', 'INREDLMP', 'INBLULMP',
-  'INGALITE', 'GALITE', 'TSTLAMP',
-  'INYELWLAMP', 'INPURPLAMP', 'NEGLAMP', 'NERGRED', 'TEMMORLAMP', 'TEMPDAYLAMP', 'TEMDAYLAMP', 'TEMDUSLAMP',
-  'TEMNITLAMP', 'SNOMORLAMP',
-  'SNODAYLAMP', 'SNODUSLAMP', 'SNONITLAMP',
-];
+import { AlphaDrawable } from './AlphaDrawable.js';
 
 const AnimImages = [
   // "ProductionAnim",  // you don't want ProductionAnims on map renders, but IdleAnim instead
@@ -64,7 +57,10 @@ export class BuildingDrawable extends Drawable {
     super.LoadFromRules();
 
     this.IsBuildingPart = true;
-    this.InvisibleInGame = this.Rules!.readBool('InvisibleInGame') || LampNames.includes(this.Name.toUpperCase());
+    // Both games have two kinds of lamp: the IN* and theater-named ones declare InvisibleInGame
+    // and only light their surroundings; REDLAMP, GALITE, TSTLAMP and friends are real light
+    // posts drawn from GALITE art.
+    this.InvisibleInGame = this.Rules!.readBool('InvisibleInGame');
     let foundation = this.Art!.readString('Foundation', '1x1');
     if (foundation.toLowerCase() !== 'custom') {
       const fx = foundation.charCodeAt(0) - '0'.charCodeAt(0);
@@ -139,6 +135,7 @@ export class BuildingDrawable extends Drawable {
         FrameDeciders.TurretFrameDecider as unknown as (obj: GameObjectLike) => number;
       turret.Props.ZAdjust = this.Rules!.readInt('TurretAnimZAdjust');
       turret.Props.Cloakable = this.Props.Cloakable;
+      turret.IsTurret = true;
       this.SubDrawables.push(turret);
 
       if (turret instanceof VoxelDrawable && turretName.toUpperCase().includes('TUR')) {
@@ -182,6 +179,10 @@ export class BuildingDrawable extends Drawable {
       this._baseShp.Shp.Initialize();
       if (this._baseShp.Shp.NumImages >= 32) this.IsActualWall = true;
     }
+
+    // the body's own z offset (BuildingClass::Draw_It zadjust = NormalZAdjust); the anims, bib and
+    // turret above cloned Props before this and carry their own keys
+    this.Props.ZAdjust = this.Art!.readInt('NormalZAdjust');
   }
 
   private LoadExtraImage(extraImage: string, inheritProps: DrawProperties): AnimDrawable | null {
@@ -192,6 +193,15 @@ export class BuildingDrawable extends Drawable {
     const extraArt = this.OwnerCollection!.Art.getOrCreateSection(animSection);
     const anim = new AnimDrawable(this._config, this._vfs, extraRules, extraArt);
     anim.OwnerCollection = this.OwnerCollection;
+    // gamemd pauses power-gated anims (<slot>Powered, default yes) on buildings that are not
+    // operating: capture-to-operate ones (NeedsEngineer: BuildingClass::Read_INI powers them off
+    // whoever owns them, and a change-house trigger turns them back on like a capture) and
+    // power-dependent ones (Powered=true; preplaced owners have no power at the frames
+    // --anim-frame simulates, so the owner's actual power balance is not modelled)
+    const slot = extraImage.endsWith('Damaged') ? extraImage.substring(0, extraImage.length - 7) : extraImage;
+    const powerGated = this.Art!.readBool(slot + 'Powered', true);
+    anim.HoldAtStart = powerGated && this.Rules!.readBool('Powered');
+    anim.HoldUntilCaptured = powerGated && this.Rules!.readBool('NeedsEngineer');
     anim.LoadFromRules();
 
     anim.NewTheater = this.NewTheater;
@@ -235,6 +245,7 @@ export class BuildingDrawable extends Drawable {
     const upgrade = new AnimDrawable(this._config, this._vfs, upgRules, upgArt);
     upgrade.OwnerCollection = this.OwnerCollection;
     upgrade.Props = inheritProps;
+    upgrade.Props.ZAdjust = 0; // the body's NormalZAdjust is not the upgrade's
     upgrade.LoadFromRules();
     upgrade.NewTheater = this.NewTheater;
     upgrade.IsBuildingPart = true;
@@ -250,6 +261,9 @@ export class BuildingDrawable extends Drawable {
   // Adds fire animations to a building. Supports custom-paletted animations.
   private LoadFireAnimations(): void {
     // http://modenc.renegadeprojects.com/DamageFireTypes
+    // BuildingClass::Start_Damage_Fires rolls one DamageFireTypes index for the whole
+    // building and then walks the list round-robin over its remaining offsets
+    const fireType = Rand.nextMax(this.OwnerCollection!.FireNames.length);
     let f = 0;
     while (true) {
       // enumerate as many fires as are existing
@@ -257,21 +271,62 @@ export class BuildingDrawable extends Drawable {
       if (dfo === '') break;
 
       const coords = dfo.split(/[,.]/).filter((s) => s !== '');
-      const fireAnim = this.OwnerCollection!.FireNames[Rand.nextMax(this.OwnerCollection!.FireNames.length)]!;
+      const fireAnim = this.OwnerCollection!.FireNames[(fireType + f - 1) % this.OwnerCollection!.FireNames.length]!;
+      const fireRules = this.OwnerCollection!.Rules.getOrCreateSection(fireAnim);
       const fireArt = this.OwnerCollection!.Art.getOrCreateSection(fireAnim);
 
+      // built on the fire's own sections instead of the building's, so it animates off FIRE0x's own
+      // Rate/LoopEnd like every other anim
       const fire = new AnimDrawable(
         this._config,
         this._vfs,
-        this.Rules,
-        this.Art,
+        fireRules,
+        fireArt,
         this._vfs.open(fireAnim + '.shp', FileFormat.Shp) as ShpFile | null,
       );
+      fire.OwnerCollection = this.OwnerCollection;
+      fire.LoadFromRules();
+      fire.AnchorToBody = true;
+      // Start_Damage_Fires (0x43C25B) gives the anim ZAdjust min(0, ((dfoY - 15*(W+H)) * 3 >> 1) - 10),
+      // which keeps the flame in front of its building whatever depth the body has; without it a
+      // flame on a flat-profile body ties that profile and the strict test drops it
+      const fireY = parseInt(coords[1], 10);
+      const halfH = this._config.TileHeight / 2;
+      fire.Props.ZAdjust = Math.min(0, (((fireY - (this.Foundation.Width + this.Foundation.Height) * halfH) * 3) >> 1) - 10);
       fire.Props.PaletteOverride = this.GetFireAnimPalette(fireArt);
-      fire.Props.Offset = new Point(parseInt(coords[0], 10) + this._config.TileWidth / 2, parseInt(coords[1], 10));
-      fire.Props.FrameDecider = FrameDeciders.RandomFrameDecider;
+      const dfoX = parseInt(coords[0], 10);
+      const dfoY = parseInt(coords[1], 10);
+      // AnimClass::Draw_It adds the art's YDrawOffset to the draw point (nothing for X)
+      fire.Props.Offset = new Point(this._config.TileWidth / 2, fireArt.readInt('YDrawOffset'));
+      fire.Props.OffsetHack = (obj) => this.DamageFireOffset(obj, dfoX, dfoY);
       this._fires.push(fire);
     }
+  }
+
+  // Start_Damage_Fires (0x43C0D0) does not place a fire at the pixel pair the art declares: it
+  // pushes the offset through the tactical pixel-to-lepton matrix (TacticalClass+0xDE4, the
+  // float literals 4.2667 / 8.5334 rather than 128/30 and 128/15) and truncates each lepton
+  // with _ftol, adds that to the building's coordinate minus half a cell (BuildingClass
+  // GetCoords 0x459EF0; the building sits at its entry cell's centre), and the anim's draw
+  // point is CoordsToClient (0x6D1F10, truncating integer division) of the sum. Both
+  // truncations move the flame up to a pixel. Returned relative to the cell's top corner;
+  // Props.Offset carries the TileWidth/2 from there to the point ShpRenderer centres on.
+  private static readonly TacticalInvX = Math.fround(4.2667);
+  private static readonly TacticalInvY = Math.fround(8.5334);
+
+  private DamageFireOffset(obj: GameObjectLike, dfoX: number, dfoY: number): Point {
+    const cx = obj.Tile.Rx;
+    const cy = obj.Tile.Ry;
+    const halfW = this._config.TileWidth / 2;
+    const halfH = this._config.TileHeight / 2;
+    // Matrix3D * Vector3 in x87 extended precision, stored to float, then _ftol truncates
+    const dx = Math.trunc(Math.fround(BuildingDrawable.TacticalInvX * dfoX + BuildingDrawable.TacticalInvY * dfoY));
+    const dy = Math.trunc(Math.fround(-BuildingDrawable.TacticalInvX * dfoX + BuildingDrawable.TacticalInvY * dfoY));
+    const fx = cx * 256 + dx;
+    const fy = cy * 256 + dy;
+    const px = Math.trunc((halfW * (fx - fy)) / 256);
+    const py = Math.trunc((halfH * (fx + fy)) / 256);
+    return new Point(px - halfW * (cx - cy), py - halfH * (cx + cy));
   }
 
   /* Finds out the correct name for an animation palette to use with fire animations.
@@ -293,7 +348,11 @@ export class BuildingDrawable extends Drawable {
   }
 
   override Draw(obj: GameObject, ds: DrawingSurface, shadows = true): void {
-    if (this.InvisibleInGame) return;
+    if (this.InvisibleInGame) {
+      // invisible lamp buildings still project their AlphaImage glow in game
+      for (const sub of this.SubDrawables) if (sub instanceof AlphaDrawable) sub.Draw(obj, ds, false);
+      return;
+    }
 
     // RA2/YR building rubble
     if (obj instanceof StructureObject && (obj as StructureObject).Health === 0 && this._config.Engine >= EngineType.RedAlert2 && this._baseShp != null && this._baseShp.Shp != null) {
@@ -304,8 +363,9 @@ export class BuildingDrawable extends Drawable {
         rubble.Props.PaletteOverride = this.OwnerCollection!.Palettes.IsoPalette;
         rubble.Props.FrameDecider =
           FrameDeciders.BuildingRubbleFrameDecider(rubble.Shp!.NumImages) as unknown as (obj: GameObjectLike) => number;
-        if (shadows) rubble.DrawShadow(obj, ds);
+        obj.DrawnBodyAnchorY = rubble.GetDrawnBottomY(obj);
         rubble.Draw(obj, ds, false);
+        if (shadows) rubble.DrawShadow(obj, ds);
         return;
       }
     }
@@ -326,6 +386,10 @@ export class BuildingDrawable extends Drawable {
         if (health > this._conditionRedHealth && this._canBeOccupied) isOnFire = false;
       }
     }
+
+    // the body's drawn bottom row is the z anchor the game uses for the whole
+    // building; parts above it (anims, turrets) share it via StructureObject
+    if (obj instanceof StructureObject) obj.DrawnBodyAnchorY = this._baseShp!.GetDrawnBottomY(obj);
 
     let drawList: Drawable[] = [];
     drawList.push(this._baseShp!);
@@ -356,8 +420,17 @@ export class BuildingDrawable extends Drawable {
       .map((x) => x.d);
 
     for (const d of drawList) {
-      if (shadows) d.DrawShadow(obj, ds);
+      // an attached anim is drawn with every other anim after the object pass, never here
+      if (d instanceof AnimDrawable) {
+        // AnimDrawable.Draw's third parameter is omitShadow: it draws its own shadow,
+        // so an explicit DrawShadow here would darken the same pixels twice
+        ds.deferAnim(() => d.Draw(obj, ds, !shadows));
+        continue;
+      }
+      // the engine emits body then shadow for a building, which is what lets a shadow
+      // darken the body it belongs to
       d.Draw(obj, ds, false);
+      if (shadows) d.DrawShadow(obj, ds);
     }
 
     const strObj = obj as StructureObject;

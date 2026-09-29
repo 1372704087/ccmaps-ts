@@ -1,8 +1,7 @@
 // Port of CNCMaps.Engine.Map.Operations
 import { logger } from '../../shared/Log.js';
 import { Rand } from '../../shared/Util.js';
-import { EngineType, OverlayTibType } from '../../shared/Enums.js';
-import type { ShpFile } from '../../formats/ShpFile.js';
+import { EngineType } from '../../shared/Enums.js';
 import { TileLayer, TileDirection } from './TileLayer.js';
 import { MapTile } from './MapTile.js';
 import { OverlayObject } from './GameObjects.js';
@@ -10,208 +9,210 @@ import { SpecialOverlays } from '../game/SpecialOverlays.js';
 import type { TileCollection } from '../game/TileCollection.js';
 import type { ShpDrawable } from '../drawables/ShpDrawable.js';
 import type { TileDrawable } from '../drawables/TileDrawable.js';
+import type { Drawable } from '../drawables/Drawable.js';
 
-export class Operations {
-  static RecalculateOreSpread(ovls: Iterable<OverlayObject>, engine: EngineType): void {
-    logger.info('Redistributing ore-spread over patches');
+// Random2Class: a 250-entry XOR lagged-Fibonacci table, Index1 and Index2 = Index1 + 103
+class VeinRandom2 {
+  private readonly table: Int32Array;
+  private i1: number;
+  private i2: number;
 
-    for (const o of ovls) {
-      // The value consists of the sum of all dx's with a little magic offsets
-      // plus the sum of all dy's with also a little magic offset, and also
-      // everything is calculated modulo 12
-      const type = SpecialOverlays.GetOverlayTibType(o, engine);
+  constructor(state: number[]) {
+    this.i1 = state[0] | 0;
+    this.i2 = state[1] | 0;
+    this.table = new Int32Array(250);
+    for (let i = 0; i < 250; i++) this.table[i] = state[i + 2] | 0;
+  }
 
-      if (type === OverlayTibType.Ore) {
-        const x = o.Tile != null ? o.Tile.Dx : 0;
-        const y = o.Tile != null ? o.Tile.Dy : 0;
-        const yInc = ((((y - 9) / 2) % 12) * (((y - 8) / 2) % 12)) % 12;
-        const xInc = ((((x - 13) / 2) % 12) * (((x - 12) / 2) % 12)) % 12;
+  next(): number {
+    this.table[this.i1] ^= this.table[this.i2];
+    const val = this.table[this.i1];
+    if (++this.i1 >= 250) this.i1 = 0;
+    if (++this.i2 >= 250) this.i2 = 0;
+    return val;
+  }
+}
 
-        // x_inc may be > y_inc so adding a big number outside of cell bounds
-        // will surely keep num positive
-        const num = ((yInc - xInc + 120000) | 0) % 12;
+// CellClass::Adjacent_Cell order N, E, S, W; map north is the screen's top right
+const VeinCardinal: TileDirection[] = [
+  TileDirection.TopRight,
+  TileDirection.BottomRight,
+  TileDirection.BottomLeft,
+  TileDirection.TopLeft,
+];
 
-        if (engine <= EngineType.RedAlert2)
-          o.OverlayID = SpecialOverlays.Ra2MinIdRiparius + num;
-        else o.OverlayID = SpecialOverlays.TsMinIdRiparius + num;
-      } else if (type === OverlayTibType.Gems) {
-        const x = o.Tile != null ? o.Tile.Dx : 0;
-        const y = o.Tile != null ? o.Tile.Dy : 0;
-        const yInc = ((((y - 9) / 2) % 12) * (((y - 8) / 2) % 12)) % 12;
-        const xInc = ((((x - 13) / 2) % 12) * (((x - 12) / 2) % 12)) % 12;
+class VeinField {
+  static readonly FirstSolid = 48;
+  private static readonly FirstRamp = VeinField.FirstSolid + 3;
 
-        const num = ((yInc - xInc + 120000) | 0) % 12;
+  private readonly _ovls: OverlayObject[];
+  private readonly _id: number;
+  private readonly _drawable: Drawable;
 
-        if (engine <= EngineType.RedAlert2)
-          o.OverlayID = SpecialOverlays.Ra2MinIdCruentus + num;
-        else o.OverlayID = SpecialOverlays.TsMinIdCruentus + num;
-      } else if (type === OverlayTibType.Vinifera) {
-        const x = o.Tile != null ? o.Tile.Dx : 0;
-        const y = o.Tile != null ? o.Tile.Dy : 0;
-        const yInc = ((((y - 9) / 2) % 12) * (((y - 8) / 2) % 12)) % 12;
-        const xInc = ((((x - 13) / 2) % 12) * (((x - 12) / 2) % 12)) % 12;
+  constructor(ovls: OverlayObject[], id: number, drawable: Drawable) {
+    this._ovls = ovls;
+    this._id = id;
+    this._drawable = drawable;
+  }
 
-        const num = ((yInc - xInc + 120000) | 0) % 12;
+  private static Overlay(t: MapTile | null): OverlayObject | null {
+    return (t?.AllObjects.find((a) => a instanceof OverlayObject) as OverlayObject | undefined) ?? null;
+  }
 
-        if (engine <= EngineType.RedAlert2)
-          o.OverlayID = SpecialOverlays.Ra2MinIdVinifera + num;
-        else o.OverlayID = SpecialOverlays.TsMinIdVinifera + num;
-      } else if (type === OverlayTibType.Aboreus) {
-        const x = o.Tile != null ? o.Tile.Dx : 0;
-        const y = o.Tile != null ? o.Tile.Dy : 0;
-        const yInc = ((((y - 9) / 2) % 12) * (((y - 8) / 2) % 12)) % 12;
-        const xInc = ((((x - 13) / 2) % 12) * (((x - 12) / 2) % 12)) % 12;
+  private static Image(t: MapTile | null) {
+    if (t == null) return null;
+    return (t.Drawable as TileDrawable | null)?.GetTileImage(t) ?? null;
+  }
 
-        const num = ((yInc - xInc + 120000) | 0) % 12;
+  private static Ramp(t: MapTile | null): number {
+    return VeinField.Image(t)?.RampType ?? 0;
+  }
 
-        if (engine <= EngineType.RedAlert2)
-          o.OverlayID = SpecialOverlays.Ra2MinIdAboreus + num;
-        else o.OverlayID = SpecialOverlays.TsMinIdAboreus + num;
+  // IsometricTileTypeClass::Land_Type maps the tmp terrain byte to ice (1-4), rock (7, 8, 15),
+  // water (9) and beach (10); CellClass::Can_Place_Veins refuses those four land types
+  private static LandRefusesVeins(t: MapTile | null): boolean {
+    const type = VeinField.Image(t)?.TerrainType ?? 0;
+    return (type >= 1 && type <= 4) || type === 7 || type === 8 || type === 9 || type === 10 || type === 15;
+  }
+
+  private static IsVeinType(o: OverlayObject | null): boolean {
+    return o != null && o.Drawable != null && o.Drawable.IsVeins;
+  }
+
+  private IsPlain(o: OverlayObject | null): boolean {
+    return o != null && o.Drawable === this._drawable;
+  }
+
+  CanPlaceVeins(t: MapTile): boolean {
+    if (VeinField.Ramp(t) > 4 || VeinField.LandRefusesVeins(t)) return false;
+    const own = VeinField.Overlay(t);
+    if (own != null && !VeinField.IsVeinType(own)) return false;
+    for (const dir of VeinCardinal) {
+      const n = t.Layer != null ? t.Layer.GetNeighbourTile(t, dir) : null;
+      if (n == null) continue;
+      const ovl = VeinField.Overlay(n);
+      if (VeinField.Ramp(n) > 4 && VeinField.Ramp(t) === 0 && !VeinField.IsVeinType(ovl)) return false;
+      if (VeinField.LandRefusesVeins(n)) return false;
+      if (ovl != null && !VeinField.IsVeinType(ovl)) return false;
+    }
+    return true;
+  }
+
+  PlaceVeins(t: MapTile): void {
+    const ramp = VeinField.Ramp(t);
+    if (ramp !== 0) {
+      this.Set(t, VeinField.FirstRamp + 2 * ramp + Roll2());
+      return;
+    }
+    this.Set(t, VeinField.FirstSolid + Roll3());
+    for (const dir of VeinCardinal) {
+      const n = t.Layer != null ? t.Layer.GetNeighbourTile(t, dir) : null;
+      if (n == null) continue;
+      const ovl = VeinField.Overlay(n);
+      if (VeinField.IsVeinType(ovl) && (!this.IsPlain(ovl) || ovl!.OverlayValue >= VeinField.FirstSolid)) continue;
+      const nRamp = VeinField.Ramp(n);
+      if (nRamp !== 0) {
+        this.Set(n, VeinField.FirstRamp + 2 * nRamp + Roll2());
+        continue;
       }
+      const frame = this.VeinFrame(n);
+      if (ovl == null || ovl.OverlayValue / 3 !== frame) this.Set(n, 3 * frame + Roll3());
     }
   }
 
-  static RecalculateVeinsSpread(ovls: Iterable<OverlayObject>, tiles: TileLayer): void {
-    let anyVeins: OverlayObject | null = null;
+  // CellClass::Get_Vein_Frame: one bit per cardinal neighbour holding a solid or ramp piece
+  // or a veinhole cell
+  private VeinFrame(t: MapTile): number {
+    let frame = 0;
+    for (let i = 0; i < VeinCardinal.length; i++) {
+      const n = t.Layer != null ? t.Layer.GetNeighbourTile(t, VeinCardinal[i]) : null;
+      const ovl = VeinField.Overlay(n);
+      if (this.IsPlain(ovl) ? ovl!.OverlayValue >= VeinField.FirstSolid : VeinField.IsVeinType(ovl))
+        frame |= 1 << i;
+    }
+    return frame;
+  }
 
-    // VEINHOLEDUMMY marks the cells covered by a veinhole monster; the game renders
-    // them as fully grown veins (its rules entry has IsVeins=true but points to a
-    // nonexistent image), so give these overlays the real veins drawable.
-    let veinsDrawable: ShpDrawable | null = null;
-    for (const o of ovls) {
+  private Set(t: MapTile, value: number): void {
+    let ovl = VeinField.Overlay(t);
+    if (ovl == null) {
+      ovl = new OverlayObject(this._id, 0);
+      ovl.Drawable = this._drawable;
+      // unlike the C# base tile walk, nothing backfills these for cells created this late
+      ovl.BottomTile = t;
+      ovl.TopTile = t;
+      t.AddObject(ovl);
+      this._ovls.push(ovl);
+    }
+    ovl.OverlayValue = value;
+  }
+}
+
+// The engine's abs(RandomNumber()) % 3 and abs(RandomNumber()) & 1.
+function Roll3(): number {
+  return veinRandom != null ? Math.abs(veinRandom.next()) % 3 : Rand.nextMax(3);
+}
+function Roll2(): number {
+  return veinRandom != null ? Math.abs(veinRandom.next()) & 1 : Rand.nextMax(2);
+}
+
+let veinRandom: VeinRandom2 | null = null;
+
+export class Operations {
+  /// <summary>The scenario randomizer as the engine entered its vein fixup, from a capture; null
+  /// rolls the pieces from the renderer's own generator instead.</summary>
+  static SetVeinRandomizer(state: number[] | null): void {
+    veinRandom = state == null ? null : new VeinRandom2(state);
+  }
+
+  /**
+   * Give a tiberium overlay the art the game would draw for its cell.
+   * The engine never rewrites the cell's overlay; it picks one of the type's twelve images
+   * at draw time from the cell's own coordinates, and one of the eight slope pieces that
+   * follow them when the cell ramps. The stored drawable is kept because the shadow still
+   * comes from the id the map holds.
+   */
+  static ApplyTiberiumArt(tile: MapTile, ovl: OverlayObject, engine: EngineType): void {
+    if (ovl.Drawable == null || ovl.Collection == null) return;
+    const rampType = (tile.Drawable as TileDrawable | null)?.GetTileImage(tile)?.RampType ?? 0;
+    const pooled = SpecialOverlays.GetPooledDrawId(ovl, engine, rampType);
+    if (pooled === ovl.OverlayID || pooled >= ovl.Collection.DrawableCount) return;
+    const pooledDrawable = ovl.Collection.GetDrawable(pooled);
+    if (pooledDrawable == null) return;
+    ovl.StoredDrawable = ovl.Drawable;
+    ovl.Drawable = pooledDrawable;
+  }
+
+  // Tiberian Sun rebuilds the vein field when a scenario loads (OverlayClass::Post_Read_Vein_Fixups):
+  // every VEINS cell is cleared and only the solid pieces (OverlayData 48 and up, ramp pieces
+  // included) are placed again, each spreading a connecting piece onto its four cardinal
+  // neighbours. The map's own connecting pieces are discarded, and a solid piece the terrain
+  // rejects disappears with them. The engine walks the solid cells in reverse, which only changes
+  // which random roll a cell gets.
+  static RecalculateVeinsSpread(ovls: OverlayObject[]): void {
+    const veins = ovls.filter((o) => {
       const dr = o.Drawable as ShpDrawable | null;
-      if (Operations.IsVeins(o) && dr != null && !dr.IsVeinHoleMonster && dr.Shp != null) {
-        veinsDrawable = dr;
-        break;
-      }
+      return Operations.IsVeins(o) && dr != null && !dr.IsVeinHoleMonster && dr.Shp != null;
+    });
+    if (veins.length === 0) return;
+    const field = new VeinField(ovls, veins[0].OverlayID, veins[0].Drawable!);
+    // MapClass::Iterate walks screen rows top to bottom, left to right; the fixup takes the
+    // solid cells it collected from the last back to the first
+    const solid = veins
+      .filter((o) => o.OverlayValue >= VeinField.FirstSolid)
+      .map((o) => o.Tile!)
+      .sort((a, b) => b.Rx + b.Ry - (a.Rx + a.Ry) || b.Rx - a.Rx);
+    for (const o of veins) {
+      o.Tile!.RemoveObject(o, true);
+      ovls.splice(ovls.indexOf(o), 1);
     }
-    if (veinsDrawable != null) {
-      for (const o of ovls) {
-        const dr = o.Drawable as ShpDrawable | null;
-        if (Operations.IsVeins(o) && dr != null && !dr.IsVeinHoleMonster && dr.Shp === null)
-          o.Drawable = veinsDrawable;
-      }
-    }
-
-    for (const o of ovls) {
-      const dr = o.Drawable as ShpDrawable | null;
-      if (Operations.IsVeins(o) && dr != null && !dr.IsVeinHoleMonster && o.OverlayValue / 3 === 15)
-        o.IsGeneratedVeins = true;
-    }
-
-    for (const t of tiles) {
-      let o = t.AllObjects.find((a) => a instanceof OverlayObject) as OverlayObject | undefined;
-
-      let veins = 0;
-      let rnd = 0;
-      let mul = 1;
-      const amIVeins = Operations.IsVeins(o);
-
-      if (amIVeins && o != null && o.Drawable != null && !(o.Drawable as ShpDrawable).IsVeinHoleMonster) {
-        // see if veins are positioned on ramp
-        anyVeins = o;
-        const tmpImg = (t.Drawable as TileDrawable | null)?.GetTileImage(t) ?? null;
-        if (tmpImg != null && tmpImg.RampType !== 0) {
-          if (tmpImg.RampType === 7) veins = 51;
-          else if (tmpImg.RampType === 2) veins = 55;
-          else if (tmpImg.RampType === 3) veins = 57;
-          else if (tmpImg.RampType === 4) veins = 59;
-          else {
-            continue;
-          }
-          rnd = 2;
-          mul = 1;
-        } else {
-          const ne = t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.TopRight) : null;
-          const se = t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.BottomRight) : null;
-          const sw = t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.BottomLeft) : null;
-          const nw = t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.TopLeft) : null;
-
-          const neV = ne != null && ne.AllObjects.some((a) => a instanceof OverlayObject && Operations.IsVeins(a));
-          const seV = se != null && se.AllObjects.some((a) => a instanceof OverlayObject && Operations.IsVeins(a));
-          const swV = sw != null && sw.AllObjects.some((a) => a instanceof OverlayObject && Operations.IsVeins(a));
-          const nwV = nw != null && nw.AllObjects.some((a) => a instanceof OverlayObject && Operations.IsVeins(a));
-
-          const numNeighbours = Operations.CountNeighbouringVeins4(ne, se, sw, nw, Operations.IsVeins);
-          const threshold = numNeighbours !== 4 ? 4 : 0;
-          const compare = numNeighbours === 4 ? Operations.IsFullVeins : Operations.IsVeins;
-          const thresholdCompare = (ov: OverlayObject): boolean =>
-            threshold <= Operations.CountNeighbouringVeins(ov.Tile, compare);
-
-          if (neV && ne != null && ne.AllObjects.some((a) => a instanceof OverlayObject && thresholdCompare(a)))
-            veins += 1;
-
-          if (seV && se != null && se.AllObjects.some((a) => a instanceof OverlayObject && thresholdCompare(a)))
-            veins += 2;
-
-          if (swV && sw != null && sw.AllObjects.some((a) => a instanceof OverlayObject && thresholdCompare(a)))
-            veins += 4;
-
-          if (nwV && nw != null && nw.AllObjects.some((a) => a instanceof OverlayObject && thresholdCompare(a)))
-            veins += 8;
-
-          if (veins === 15 && o != null && !o.IsGeneratedVeins) veins++;
-
-          mul = 3;
-          rnd = 3;
-        }
-      }
-
-      if (veins !== 0 || amIVeins) {
-        if (o == null) {
-          // on the fly veins creation..
-          if (anyVeins == null) continue;
-          o = new OverlayObject(anyVeins.OverlayID, Rand.nextMax(3));
-          o.IsGeneratedVeins = true;
-          o.Drawable = anyVeins.Drawable;
-          o.Palette = anyVeins.Palette;
-          o.BottomTile = t;
-          o.TopTile = t;
-          t.AddObject(o);
-        } else {
-          o.OverlayValue = (veins * mul + Rand.nextMax(rnd)) & 0xff;
-        }
-      }
+    for (const t of solid) {
+      if (field.CanPlaceVeins(t)) field.PlaceVeins(t);
     }
   }
 
   static IsVeins(o: OverlayObject | null | undefined): boolean {
     return o != null && o.Drawable != null && o.Drawable.IsVeins;
-  }
-
-  static IsFullVeins(o: OverlayObject | null | undefined): boolean {
-    return (
-      o != null &&
-      !o.IsGeneratedVeins &&
-      o.Drawable != null &&
-      o.Drawable.IsVeins &&
-      (o.Drawable.IsVeinHoleMonster || o.OverlayValue / 3 === 16)
-    );
-  }
-
-  static CountNeighbouringVeins(
-    t: MapTile | null,
-    test: (tile: OverlayObject) => boolean,
-  ): number {
-    const ne = t != null && t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.TopRight) : null;
-    const se = t != null && t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.BottomRight) : null;
-    const sw = t != null && t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.BottomLeft) : null;
-    const nw = t != null && t.Layer != null ? t.Layer.GetNeighbourTile(t, TileDirection.TopLeft) : null;
-    return Operations.CountNeighbouringVeins4(ne, se, sw, nw, test);
-  }
-
-  private static CountNeighbouringVeins4(
-    ne: MapTile | null,
-    se: MapTile | null,
-    sw: MapTile | null,
-    nw: MapTile | null,
-    test: (tile: OverlayObject) => boolean,
-  ): number {
-    const neV = ne != null && ne.AllObjects.some((a) => a instanceof OverlayObject && test(a));
-    const seV = se != null && se.AllObjects.some((a) => a instanceof OverlayObject && test(a));
-    const swV = sw != null && sw.AllObjects.some((a) => a instanceof OverlayObject && test(a));
-    const nwV = nw != null && nw.AllObjects.some((a) => a instanceof OverlayObject && test(a));
-    return (neV ? 1 : 0) + (seV ? 1 : 0) + (swV ? 1 : 0) + (nwV ? 1 : 0);
   }
 
   /// <summary>Recalculates tile system.</summary>
@@ -227,6 +228,9 @@ export class Operations {
       if (collection.IsCLAT(t.SetNum)) {
         t.SetNum = collection.GetLAT(t.SetNum);
         t.TileNum = collection.GetTileNumFromSet(t.SetNum);
+        // the drawable was picked from the map's tile before this pass; a cell the
+        // autolat below leaves plain would otherwise keep drawing the CLAT art
+        t.Drawable = collection.GetDrawable(t);
       }
     }
 
@@ -291,41 +295,43 @@ export class Operations {
         }
       }
       // apply ramp fixup
-      else if (t.SetNum === collection.RampBase) {
+      else if (t.SetNum === collection.RampBase || t.SetNum === collection.RampSmooth) {
         const ti = t.GetTileImage();
-        if (ti == null || ti.RampType < 1 || 4 < ti.TerrainType) continue;
+        if (ti == null || ti.RampType < 1 || 4 < ti.RampType) continue;
+
+        // an off-map neighbour counts as flat, like the game's blank cell
+        const flatAt = (dir: TileDirection): boolean => {
+          const n = tiles.GetNeighbourTile(t, dir);
+          return (n?.GetTileImage()?.RampType ?? 0) === 0;
+        };
 
         let fixup = -1;
-        const tileTopRight = tiles.GetNeighbourTile(t, TileDirection.TopRight);
-        const tileBottomRight = tiles.GetNeighbourTile(t, TileDirection.BottomRight);
-        const tileBottomLeft = tiles.GetNeighbourTile(t, TileDirection.BottomLeft);
-        const tileTopLeft = tiles.GetNeighbourTile(t, TileDirection.TopLeft);
-
         switch (ti.RampType) {
           case 1:
             // northwest facing
-            if (tileTopLeft != null && tileTopLeft.GetTileImage()?.RampType === 0) fixup++;
-            if (tileBottomRight != null && tileBottomRight.GetTileImage()?.RampType === 0) fixup += 2;
+            if (flatAt(TileDirection.TopLeft)) fixup++;
+            if (flatAt(TileDirection.BottomRight)) fixup += 2;
             break;
           case 2: // northeast facing
-            if (tileTopRight != null && tileTopRight.GetTileImage()?.RampType === 0) fixup++;
-            if (tileBottomLeft != null && tileBottomLeft.GetTileImage()?.RampType === 0) fixup += 2;
+            if (flatAt(TileDirection.TopRight)) fixup++;
+            if (flatAt(TileDirection.BottomLeft)) fixup += 2;
             break;
           case 3: // southeast facing
-            if (tileBottomRight != null && tileBottomRight.GetTileImage()?.RampType === 0) fixup++;
-            if (tileTopLeft != null && tileTopLeft.GetTileImage()?.RampType === 0) fixup += 2;
+            if (flatAt(TileDirection.BottomRight)) fixup++;
+            if (flatAt(TileDirection.TopLeft)) fixup += 2;
             break;
           case 4: // southwest facing
-            if (tileBottomLeft != null && tileBottomLeft.GetTileImage()?.RampType === 0) fixup++;
-            if (tileTopRight != null && tileTopRight.GetTileImage()?.RampType === 0) fixup += 2;
+            if (flatAt(TileDirection.BottomLeft)) fixup++;
+            if (flatAt(TileDirection.TopRight)) fixup += 2;
             break;
         }
 
-        if (fixup !== -1) {
-          t.TileNum = collection.GetTileNumFromSet(collection.RampSmooth, (ti.RampType - 1) * 3 + fixup);
-          // update drawable too
-          t.Drawable = collection.GetDrawable(t);
-        }
+        t.TileNum =
+          fixup !== -1
+            ? collection.GetTileNumFromSet(collection.RampSmooth, (ti.RampType - 1) * 3 + fixup)
+            : collection.GetTileNumFromSet(collection.RampBase, ti.RampType - 1);
+        // update drawable too: a smooth piece whose flat neighbours are gone reverts to the plain ramp
+        t.Drawable = collection.GetDrawable(t);
       }
     }
   }

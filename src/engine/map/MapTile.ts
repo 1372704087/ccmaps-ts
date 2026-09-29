@@ -4,6 +4,7 @@ import type { TmpFile } from '../../formats/TmpFile.js';
 import { NumberedObject, GameObject } from './GameObjects.js';
 import type { TileLayer } from './TileLayer.js';
 import type { TileDrawable } from '../drawables/TileDrawable.js';
+import type { Palette } from '../../rendering/Palette.js';
 
 export class MapTile extends NumberedObject {
   Dx = 0;
@@ -40,6 +41,10 @@ export class MapTile extends NumberedObject {
   }
 
   ExtraDataAffected = false;
+  // A tunnel piece keeps every cell at the road level while its extra image carries the cliff
+  // face and roof above it; the game lights that roof as the tunnel floor. Set to the plateau
+  // palette of the highest cardinal neighbour so the roof is lit as the tile it belongs to.
+  ExtraPalette: Palette | null = null;
 
   get AllObjects(): GameObject[] {
     return this._allObjects;

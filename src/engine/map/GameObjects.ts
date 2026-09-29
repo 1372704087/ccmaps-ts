@@ -1,5 +1,5 @@
 // Port of CNCMaps.Engine.Map.GameObjects
-import { Rectangle } from '../../shared/Geometry.js';
+import { Point, Rectangle } from '../../shared/Geometry.js';
 import { Palette } from '../../rendering/Palette.js';
 import { IniSection } from '../../formats/IniFile.js';
 import { Lighting } from '../../formats/map/Lighting.js';
@@ -130,14 +130,16 @@ export class InfantryObject extends NamedObject implements OwnableObject {
   Direction = 0;
   OnBridge = false;
   Owner = '';
+  SubCell = 0;
 
-  constructor(owner: string, name: string, health: number, direction: number, onBridge: boolean) {
+  constructor(owner: string, name: string, health: number, direction: number, subCell: number, onBridge: boolean) {
     super();
     this.useOwnBaseTiles();
     this.Owner = owner;
     this.Name = name;
     this.Health = health;
     this.Direction = direction;
+    this.SubCell = subCell;
     this.OnBridge = onBridge;
   }
 }
@@ -152,6 +154,11 @@ export class StructureObject extends NamedObject implements OwnableObject {
   Upgrade2 = '';
   Upgrade3 = '';
   WallBuildingFrame = 0;
+  /// <summary>Handed to a starting player by a game-start trigger (see MapFile.ApplyPreCapturedOwners).</summary>
+  PreCaptured = false;
+  /** The body's drawn bottom row, the z anchor the game uses for the whole building;
+   * parts above it (anims, turrets) share it. Set while the building draws. */
+  DrawnBodyAnchorY: number | null = null;
 
   constructor(owner: string, name: string, health: number, direction: number) {
     super();
@@ -169,6 +176,13 @@ export class LightSource extends StructureObject {
   LightRedTint = 0;
   LightGreenTint = 0;
   LightBlueTint = 0;
+
+  // The engine lights from the building's centre coordinate, Location + (Foundation - 1)
+  // half cells per axis (BuildingClass::GetCoords 0x447ac0), so the GALITE lamps with
+  // Foundation=0x0 light from their cell's top corner and reach the 2x2 block up-left of it.
+  PosX = 0;
+  PosY = 0;
+
   private scenario: Lighting | null = null;
 
   constructor();
@@ -184,31 +198,44 @@ export class LightSource extends StructureObject {
   private Initialize(lamp: IniSection, scenario: Lighting): void {
     logger.trace(`Loading LightSource ${lamp.Name} at (${this.Tile})`);
 
-    // Read and assume default values
+    // An absent tint defaults to 1000.0 in the game (BuildingTypeClass ctor inits the fields to
+    // 1,000,000 per-mille), so a lamp with an intensity but no tints saturates the tint clamp and
+    // doubles brightness over its whole radius. Vanilla lamps set all three.
     this.LightVisibility = lamp.readDouble('LightVisibility', 5000.0);
     this.LightIntensity = lamp.readDouble('LightIntensity', 0.0);
-    this.LightRedTint = lamp.readDouble('LightRedTint', 1.0);
-    this.LightGreenTint = lamp.readDouble('LightGreenTint', 1.0);
-    this.LightBlueTint = lamp.readDouble('LightBlueTint', 1.0);
+    this.LightRedTint = lamp.readDouble('LightRedTint', 1000.0);
+    this.LightGreenTint = lamp.readDouble('LightGreenTint', 1000.0);
+    this.LightBlueTint = lamp.readDouble('LightBlueTint', 1000.0);
     this.scenario = scenario;
+  }
+
+  // A map section for the type makes the engine re-read it (BuildingTypeClass::Read_INI, gamemd
+  // 0x460cac; OpenTS builtype.cpp:1206) with the per-mille field / 1000 as the default, and that
+  // division is integer. Every light key the map section omits is truncated to whole units,
+  // which turns off a lamp with a fractional intensity (xeb2 Sinkhole's INGRNLMP override).
+  truncateKeysOmittedBy(mapSection: IniSection): void {
+    if (!mapSection.hasKey('LightIntensity')) this.LightIntensity = Math.trunc(this.LightIntensity);
+    if (!mapSection.hasKey('LightRedTint')) this.LightRedTint = Math.trunc(this.LightRedTint);
+    if (!mapSection.hasKey('LightGreenTint')) this.LightGreenTint = Math.trunc(this.LightGreenTint);
+    if (!mapSection.hasKey('LightBlueTint')) this.LightBlueTint = Math.trunc(this.LightBlueTint);
   }
 
   /** Applies a lamp to this object's palette if it's in range */
   ApplyLamp(obj: GameObject, ambientOnly = false): boolean {
     const lamp = this;
+    // the game only creates a light source for buildings with LightIntensity != 0
     const TOLERANCE = 0.001;
     if (Math.abs(lamp.LightIntensity) < TOLERANCE) return false;
 
     const drawLocation = obj.Tile;
     if (drawLocation == null || lamp.Tile == null) return false;
-    const sqX = (lamp.Tile.Rx - drawLocation.Rx) * (lamp.Tile.Rx - drawLocation.Rx);
-    const sqY = (lamp.Tile.Ry - drawLocation.Ry) * (lamp.Tile.Ry - drawLocation.Ry);
+    const dx = lamp.PosX - drawLocation.Rx;
+    const dy = lamp.PosY - drawLocation.Ry;
+    const leptons = 256 * Math.sqrt(dx * dx + dy * dy);
 
-    const distance = Math.sqrt(sqX + sqY);
-
-    // checks whether we're in range
-    if (0 < lamp.LightVisibility && distance < lamp.LightVisibility / 256) {
-      const lsEffect = (lamp.LightVisibility - 256 * distance) / lamp.LightVisibility;
+    // LightSourceClass::Process (0x554af0) truncates the distance and keeps d <= visibility
+    if (0 < lamp.LightVisibility && Math.floor(leptons) <= lamp.LightVisibility) {
+      const lsEffect = (lamp.LightVisibility - leptons) / lamp.LightVisibility;
 
       // we don't want to apply lamps to shared palettes, so clone first
       if (obj.Palette != null && obj.Palette.IsShared) obj.Palette = obj.Palette.clone();
@@ -230,6 +257,14 @@ export class OverlayObject extends NumberedObject {
 
   OverlayValue = 0;
 
+  /** The drawable of the id the map stored, kept when tiberium swaps in the type's pooled art,
+   * because the shadow still comes from the stored id. */
+  StoredDrawable: Drawable | null = null;
+
+  /** The wall connection frame recomputed from the current neighbours (RevisitWallBuildings);
+   * the frame the map stores is often stale in hand-edited maps. */
+  WallBuildingFrame = 0;
+
   constructor(overlayID: number, overlayValue: number) {
     super();
     this.useOwnBaseTiles();
@@ -245,6 +280,9 @@ export class OverlayObject extends NumberedObject {
 }
 
 export class SmudgeObject extends NamedObject {
+  /// <summary>This copy's cell within the smudge's foundation; (0,0) is the map's own entry.</summary>
+  FoundationCell = new Point(0, 0);
+
   constructor(name: string) {
     super();
     this.useOwnBaseTiles();

@@ -56,8 +56,6 @@ export class TileDrawable extends Drawable {
         this.TsEntry.AnimationDrawable.Draw(obj, ds, false);
       }
     }
-
-    // todo: tile shadows (TS)
   }
 
   override GetBounds(obj: GameObject): Rectangle {

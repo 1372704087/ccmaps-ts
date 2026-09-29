@@ -78,6 +78,44 @@ export class SpecialOverlays {
     return OverlayTibType.NotSpecial;
   }
 
+  // gamemd draws tiberium from the type's pooled image list, not from the id stored in the map
+  // (CellClass::DrawOverlay): a flat cell draws pool[(x*y) % NumImages]; a cell on a full slope
+  // draws one of the 8 slope pieces after the flat pool, 2 per slope direction. The stored id
+  // only identifies the tiberium type. Pools hold 12 flat images; ore-style pools carry 8 slope
+  // pieces after them, the 12-entry gem pool has none.
+  static GetPooledDrawId(o: OverlayObject, engine: EngineType, rampType: number): number {
+    const tibType = SpecialOverlays.GetOverlayTibType(o, engine);
+    if (tibType === OverlayTibType.NotSpecial) return o.OverlayID;
+    let min: number;
+    let max: number;
+    const ts = engine <= EngineType.Firestorm;
+    switch (tibType) {
+      case OverlayTibType.Riparius:
+        min = ts ? SpecialOverlays.TsMinIdRiparius : SpecialOverlays.Ra2MinIdRiparius;
+        max = ts ? SpecialOverlays.TsMaxIdRiparius : SpecialOverlays.Ra2MaxIdRiparius;
+        break;
+      case OverlayTibType.Cruentus:
+        min = ts ? SpecialOverlays.TsMinIdCruentus : SpecialOverlays.Ra2MinIdCruentus;
+        max = ts ? SpecialOverlays.TsMaxIdCruentus : SpecialOverlays.Ra2MaxIdCruentus;
+        break;
+      case OverlayTibType.Vinifera:
+        min = ts ? SpecialOverlays.TsMinIdVinifera : SpecialOverlays.Ra2MinIdVinifera;
+        max = ts ? SpecialOverlays.TsMaxIdVinifera : SpecialOverlays.Ra2MaxIdVinifera;
+        break;
+      default:
+        min = ts ? SpecialOverlays.TsMinIdAboreus : SpecialOverlays.Ra2MinIdAboreus;
+        max = ts ? SpecialOverlays.TsMaxIdAboreus : SpecialOverlays.Ra2MaxIdAboreus;
+        break;
+    }
+    const numImages = Math.min(12, max - min + 1);
+    const numSlopes = max - min + 1 - numImages;
+    const tile = o.Tile;
+    const cellProduct = tile != null ? tile.Rx * tile.Ry : 0;
+    if (rampType >= 1 && rampType <= 4 && numSlopes >= 8)
+      return min + numImages + (cellProduct % 2) + (rampType - 1) * 2;
+    return min + (cellProduct % numImages);
+  }
+
   static GetTibName(o: OverlayObject, engine: EngineType): string {
     if (engine <= EngineType.Firestorm) {
       if (SpecialOverlays.IsTS_Riparius(o)) return 'Riparius';

@@ -35,7 +35,7 @@ export class AlphaDrawable extends ShpDrawable {
 
   override Draw(obj: GameObject, ds: DrawingSurface, shadow = true): void {
     if (!obj.Drawable!.Props.Cloakable)
-      this._renderer.DrawAlpha(obj as unknown as GameObjectLike, this.Shp!, this.Props, ds);
+      ds.deferAlpha(() => this._renderer.DrawAlpha(obj as unknown as GameObjectLike, this.Shp!, this.Props, ds));
   }
 }
 

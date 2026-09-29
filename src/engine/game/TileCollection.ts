@@ -9,11 +9,18 @@ import type { IniFile } from '../../formats/IniFile.js';
 import { FileFormat } from '../../formats/FileFormat.js';
 import type { TmpFile } from '../../formats/TmpFile.js';
 import '../../formats/TmpFile.js';
+import { ShpFile } from '../../formats/ShpFile.js';
+import { Point } from '../../shared/Geometry.js';
+import type { DrawingSurface } from '../../rendering/DrawingSurface.js';
+import { ShpRenderer } from '../../rendering/ShpRenderer.js';
 import { VirtualFileSystem } from '../../formats/vfs/index.js';
 import { TheaterSettings, ModConfig } from '../../shared/ModConfig.js';
-import { TheaterType, CollectionType } from '../../shared/Enums.js';
-import { Rand } from '../../shared/Util.js';
+import { TheaterType, CollectionType, EngineType } from '../../shared/Enums.js';
 import { logger } from '../../shared/Log.js';
+
+function idiv(a: number, b: number): number {
+  return Math.trunc(a / b);
+}
 
 // C# inner class CNCMaps.Engine.Game.TileCollection.TileSet
 // (hoisted to module scope since TypeScript has no nested classes)
@@ -23,6 +30,9 @@ export class TileSet {
   TilesInSet: number;
   Entries: TileSetEntry[] = [];
   TileSetNum: number; // short
+  /// <summary>Theater ini ShadowCaster: Tiberian Sun darkens the ground beside some of this
+  /// set's cliff pieces with a shadow of its own.</summary>
+  ShadowCaster = false;
 
   constructor(fileName: string, setName: string, tilesInSet: number, tileSetNum: number) {
     this.FileName = fileName;
@@ -62,7 +72,7 @@ export class TileSetEntry implements TileSetEntryShape {
 
   GetTmpFile(t: MapTile, damaged = false): TmpFile | null {
     if (this.TmpFiles.length === 0) return null;
-    const randomChosen = this.TmpFiles[Rand.nextMax(this.TmpFiles.length)];
+    const randomChosen = this.TmpFiles[this.PickVariant(t)];
     // if this is not a randomizing tileset, but instead one with damaged data,
     // then return the "undamaged" version
     randomChosen.Initialize();
@@ -77,12 +87,71 @@ export class TileSetEntry implements TileSetEntryShape {
     }
   }
 
+  // gamemd picks tile variants as a pure function of the cell (CellClass tile variant pick
+  // 0x4814F0): sets with more than 4 variants index an 8x8 lattice by (x&7, y&7), smaller sets
+  // the game's static 4x4 Latin square by (x&3, y&3). Multi-cell tiles index by their origin
+  // cell scaled to the tile grid. The game builds one random lattice per session; this uses a
+  // fixed adjacency-valid one, overridable for A/B runs against a capture.
+  private PickVariant(t: MapTile): number {
+    const count = this.TmpFiles.length;
+    if (count <= 1) return 0;
+    let x = t.Rx;
+    let y = t.Ry;
+    if (t.SubTile !== 0) {
+      const tmp = this.TmpFiles[0];
+      tmp.Initialize();
+      x = Math.trunc((x - (t.SubTile % tmp.Width)) / tmp.Width);
+      y = Math.trunc((y - Math.trunc(t.SubTile / tmp.Width)) / tmp.Height);
+    }
+    const v =
+      count > 4
+        ? TileCollection.VariantLattice[(x & 7) + (y & 7) * 8]
+        : TileCollection.VariantPattern4[((y & 3) << 2) | (x & 3)];
+    return v >= count ? v % count : v;
+  }
+
   toString(): string {
     return `${this.MemberOfSet.SetName} (${this.Index})`;
   }
 }
 
 export class TileCollection extends GameCollection {
+  // the game's static 4x4 variant pattern (0x81CCA8)
+  static readonly VariantPattern4 = [0, 1, 2, 3, 3, 2, 1, 0, 2, 3, 0, 1, 1, 0, 3, 2];
+
+  // (3x + 2y) & 7: no two orthogonally or diagonally adjacent cells share a value,
+  // including across the (x&7, y&7) tiling seams, like the game's constrained lattice
+  private static readonly DefaultVariantLattice = TileCollection.BuildDefaultLattice();
+
+  private static BuildDefaultLattice(): number[] {
+    const l = new Array<number>(64);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) l[x + y * 8] = (3 * x + 2 * y) & 7;
+    return l;
+  }
+
+  /// <summary>The 8x8 variant lattice; replaceable with the one exported from an
+  /// engine capture to make A/B renders art-identical.</summary>
+  static VariantLattice: number[] = TileCollection.DefaultVariantLattice;
+
+  /// <summary>Sets the variant lattice, restoring the built-in one when given null. This
+  /// static outlives a single render, so every render assigns it rather than only the
+  /// renders that carry an override.</summary>
+  static SetVariantLattice(lattice: number[] | null): void {
+    TileCollection.VariantLattice = lattice ?? TileCollection.DefaultVariantLattice;
+  }
+
+  // IsometricTileTypeClass::Draw_Shadow_Caster (OpenTS isotype.cpp): engine literals keyed by the piece's
+  // index within its set, giving the C_SHADOW.SHP frame (1-based), the one subtile of the piece that
+  // casts, and where the shadow is centred relative to the cell diamond's centre (48x24 cell)
+  private static readonly CliffCasters = new Map<number, [number, number, number, number]>([
+    [20, [1, 0, 24, 24]], [21, [1, 0, 24, 24]], [22, [2, 1, 48, 12]], [23, [3, 1, 48, 12]], [24, [4, 1, 48, 12]],
+    [25, [5, 0, 72, 24]], [26, [6, 0, 48, 12]], [27, [7, 1, 24, 0]], [28, [8, 0, 48, 12]], [29, [9, 0, 48, 12]],
+    [30, [10, 1, 0, -12]], [31, [11, 1, 0, -12]], [32, [12, 0, 48, 12]],
+  ]);
+  private static readonly SlopeCasters = new Map<number, [number, number, number, number]>([
+    [4, [13, 6, 48, 12]], [6, [14, 1, 48, 12]],
+  ]);
+
   _theaterIni!: IniFile;
   readonly _tileNumToSet: number[] = [];
   readonly _setNumToFirstTile: number[] = [];
@@ -166,6 +235,8 @@ export class TileCollection extends GameCollection {
   // ReSharper restore InconsistentNaming
 
   private _animsSectionsStartIdx = -1;
+  private _cellShadow: ShpFile | null = null;
+  private _cellShadowTried = false;
 
   constructor(
     theater: TheaterType,
@@ -234,6 +305,10 @@ export class TileCollection extends GameCollection {
     this.MMRampBase = General.readShort('MMRampBase', -1);
     this.MMWaterCliffAPieces = General.readShort('MMWaterCliffAPieces', -1);
     this.Medians = General.readShort('Medians', -1);
+    // snowmd.ini is the one theater without a Medians key; Ares (hook 0x545904, MediansFix)
+    // substitutes set 71, the snow "Paved road bits", so pavement LAT joins those tiles
+    if (this.Medians === -1 && this._theaterSettings.Type === TheaterType.Snow && this._config?.Engine >= EngineType.RedAlert2)
+      this.Medians = 71;
     this.MiscPaveTile = General.readShort('MiscPaveTile', -1);
     this.MonorailSlopes = General.readShort('MonorailSlopes', -1);
     this.PaveTile = General.readShort('PaveTile', -1);
@@ -281,6 +356,7 @@ export class TileCollection extends GameCollection {
         sect.readInt('TilesInSet'),
         sectionIdx,
       );
+      ts.ShadowCaster = sect.readBool('ShadowCaster');
       this._setNumToFirstTile.push(this._drawables.length);
       this._tileSets.push(ts);
       sectionIdx++;
@@ -361,16 +437,23 @@ export class TileCollection extends GameCollection {
 
   ConnectTiles(setNum1: number, setNum2: number): boolean {
     if (setNum1 === setNum2) return false;
+
+    // gamemd's green LAT pass (0x47CA80) exempts shore and water-bridge neighbours; the TS
+    // engine's Fixup_LAT has no such exemption and keeps the map's transition pieces there
+    const greenExemptions = this._config == null || this._config.Engine >= EngineType.RedAlert2;
+
     // grass doesn't connect with shores
-    else if (
-      (setNum1 === this.GreenTile && setNum2 === this.ShorePieces) ||
-      (setNum2 === this.GreenTile && setNum1 === this.ShorePieces)
+    if (
+      greenExemptions &&
+      ((setNum1 === this.GreenTile && setNum2 === this.ShorePieces) ||
+        (setNum2 === this.GreenTile && setNum1 === this.ShorePieces))
     )
       return false;
     // grass doesn't connect with waterbridges
     else if (
-      (setNum1 === this.GreenTile && setNum2 === this.WaterBridge) ||
-      (setNum2 === this.GreenTile && setNum1 === this.WaterBridge)
+      greenExemptions &&
+      ((setNum1 === this.GreenTile && setNum2 === this.WaterBridge) ||
+        (setNum2 === this.GreenTile && setNum1 === this.WaterBridge))
     )
       return false;
     // pave's don't connect with paved roads
@@ -409,6 +492,16 @@ export class TileCollection extends GameCollection {
 
   IsSlope(setNum: number): boolean {
     return setNum === this.SlopeSetPieces || setNum === this.SlopeSetPieces2;
+  }
+
+  IsTunnel(setNum: number): boolean {
+    return (
+      setNum !== -1 &&
+      (setNum === this.Tunnels ||
+        setNum === this.DirtTunnels ||
+        setNum === this.TrackTunnels ||
+        setNum === this.DirtTrackTunnels)
+    );
   }
 
   IsCLAT(setNum: number): boolean {
@@ -455,6 +548,32 @@ export class TileCollection extends GameCollection {
 
   IsCrystalCliff(setNum: number): boolean {
     return setNum === this.CrystalCliff;
+  }
+
+  /// <summary>Tiberian Sun's cast shadow of a cliff or slope piece: a C_SHADOW frame darkening the ground
+  /// beside it (CellClass::Draw_Shadow_Cast). The slope sets take their own table; every other set casts
+  /// only when its theater ini section says ShadowCaster=true. gamemd has no such pass.</summary>
+  DrawTileShadow(tile: MapTile | null, ds: DrawingSurface): void {
+    if (this._config == null || this._config.Engine > EngineType.Firestorm || tile == null) return;
+    const setNum = this.GetSetNum(tile.TileNum);
+    if (setNum >= this._tileSets.length) return;
+    const table = this.IsSlope(setNum)
+      ? TileCollection.SlopeCasters
+      : this._tileSets[setNum].ShadowCaster
+        ? TileCollection.CliffCasters
+        : null;
+    const caster = table?.get(tile.TileNum - this._setNumToFirstTile[setNum]);
+    if (caster == null || caster[1] !== tile.SubTile) return;
+    if (!this._cellShadowTried) {
+      this._cellShadowTried = true;
+      this._cellShadow = this._vfs.open('c_shadow.shp', FileFormat.Shp) as ShpFile | null;
+    }
+    if (this._cellShadow == null) return;
+    const centre = new Point(
+      idiv(tile.Dx * this._config.TileWidth, 2) + idiv(this._config.TileWidth, 2) + caster[2],
+      idiv((tile.Dy - tile.Z) * this._config.TileHeight, 2) + idiv(this._config.TileHeight, 2) + caster[3],
+    );
+    new ShpRenderer(this._config, this._vfs).DrawTileShadow(tile, this._cellShadow, caster[0] - 1, centre, ds);
   }
 
   GetSetNum(tileNum: number): number {

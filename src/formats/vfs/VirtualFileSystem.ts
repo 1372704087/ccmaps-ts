@@ -89,14 +89,14 @@ export class VirtualFileSystem {
     return mixDirOverride;
   }
 
-  loadMixes(dir: string, engine: EngineType): boolean {
+  loadMixes(dir: string, engine: EngineType, loadExpandMixes = true): boolean {
     if (!this.allArchives.some((a) => a instanceof DirArchive && normalizePath(dir) === normalizePath(a.directory))) {
       this.addItem(dir);
     }
-    return this.loadMixesFor(engine);
+    return this.loadMixesFor(engine, loadExpandMixes);
   }
 
-  private loadMixesFor(engine: EngineType): boolean {
+  private loadMixesFor(engine: EngineType, loadExpandMixes = true): boolean {
     if (engine === EngineType.AutoDetect) {
       return false;
     }
@@ -104,7 +104,7 @@ export class VirtualFileSystem {
       if (this.fileExists('patch.mix')) this.addItem('patch.mix');
     }
 
-    for (let i = 99; i >= 0; i--) {
+    for (let i = loadExpandMixes ? 99 : -1; i >= 0; i--) {
       const file =
         engine === EngineType.YurisRevenge
           ? 'expandmd' + pad2(i) + '.mix'

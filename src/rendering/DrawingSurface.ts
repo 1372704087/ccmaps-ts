@@ -25,6 +25,40 @@ export class DrawingSurface {
   readonly heightBuffer: Int32Array;
   readonly shadowBuffer: Uint8Array; // 0/1
 
+  /// <summary>Set before drawing to have the voxel blit record which pixels it wrote. Off by
+  /// default: the buffer costs a byte per pixel and only A/B diagnostics read it.</summary>
+  TrackVoxelMask = false;
+  private _voxelMask: Uint8Array | null = null;
+
+  // Attached animations are drawn once every object has been drawn. gamemd orders a scene
+  // terrain -> buildings -> anims and puts anims last whatever their position, so an anim's
+  // art is never darkened by a shadow: nothing is drawn after it.
+  private readonly _deferredAnims: (() => void)[] = [];
+  // AlphaImage glows are applied once everything else is drawn. The game keeps its alpha
+  // lighting in a buffer that every blitter reads, so the glow lights whatever ends up
+  // visible under it; drawing it in place would only light what came before.
+  private readonly _deferredAlpha: (() => void)[] = [];
+
+  /// <summary>Queue an attached animation to be drawn once every object has been drawn.</summary>
+  deferAnim(draw: () => void): void {
+    this._deferredAnims.push(draw);
+  }
+
+  drawDeferredAnims(): void {
+    for (const draw of this._deferredAnims) draw();
+    this._deferredAnims.length = 0;
+  }
+
+  /// <summary>Queue an AlphaImage glow to be applied once everything else is drawn.</summary>
+  deferAlpha(draw: () => void): void {
+    this._deferredAlpha.push(draw);
+  }
+
+  drawDeferredAlpha(): void {
+    for (const draw of this._deferredAlpha) draw();
+    this._deferredAlpha.length = 0;
+  }
+
   constructor(width: number, height: number, format: SurfaceFormat = SurfaceFormat.Bgr24) {
     logger.debug(`Initializing DrawingSurface with dimensions (${width},${height}), format ${format}`);
     this.Format = format;
@@ -61,6 +95,14 @@ export class DrawingSurface {
 
   getHeightBuffer(): Int32Array {
     return this.heightBuffer;
+  }
+
+  /// <summary>Pixels drawn by the voxel rasteriser, or null when tracking is off. The game shades
+  /// voxels differently (a known divergence), so a comparison against an engine capture masks
+  /// these out instead of counting them as defects.</summary>
+  getVoxelMask(): Uint8Array | null {
+    if (!this.TrackVoxelMask) return null;
+    return (this._voxelMask ??= new Uint8Array(this.Width * this.Height));
   }
 
   // Writes an RGB triplet at a flat byte offset (offset.Y * Stride + offset.X * 3).

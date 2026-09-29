@@ -53,7 +53,8 @@ import {
 } from '../../rendering/MapDrawing.js';
 import { Format5 } from '../../formats/encodings/Format5.js';
 import { TileCollection } from '../game/TileCollection.js';
-import { resizeBilinear } from '../../rendering/ImageUtil.js';
+import { MapStats, StartPositionPixel } from './MapStats.js';
+import { resizeBicubic } from '../../rendering/ImageUtil.js';
 
 const LIGHTING_FULL: LightingType = 4; // LightingType.Full
 
@@ -67,6 +68,12 @@ export class MapRenderer {
   StartPosMarking: StartPositionMarking = StartPositionMarking.Squared;
   StartMarkerSize: number | null = null;
   MarkOreFields = false;
+  /// <summary>Have the voxel blit record which pixels it wrote (for --debug-voxelmask).</summary>
+  TrackVoxelMask = false;
+
+  /// <summary>One rules [Colors] name per start position A-H, empty where nobody starts.
+  /// null switches the pre-capture pass off entirely.</summary>
+  PreCaptureColors: (string | null)[] | null = null;
 
   FullSize = Rectangle.Empty;
   LocalSize = Rectangle.Empty;
@@ -88,8 +95,8 @@ export class MapRenderer {
   private readonly _aircraftObjects: AircraftObject[] = [];
   private readonly _wayPoints = new Array<any>();
 
-  private readonly _countryColors = new Map<string, Color>();
-  private readonly _namedColors = new Map<string, Color>();
+  private readonly _countryColors = new Map<string, HsvColor>();
+  private readonly _namedColors = new Map<string, HsvColor>();
 
   private _lighting: any = null;
   private readonly _lightSources: LightSource[] = [];
@@ -109,6 +116,11 @@ export class MapRenderer {
     this.LocalSize = mf.LocalSize;
 
     this._tiles = new TileLayer(this.FullSize.Size, config);
+
+    // Before the objects are copied in: a map trigger can hand a neutral tech building to a
+    // starting player at game start, and rewriting the owner here lets the usual owner-to-colour
+    // path pick it up.
+    if (this.PreCaptureColors != null) mf.ApplyPreCapturedOwners(this.PreCaptureSlotOwners());
 
     this.LoadAllObjects(mf);
 
@@ -154,7 +166,14 @@ export class MapRenderer {
     }
 
     logger.info('Overriding rules.ini with map INI entries');
+    // InvisibleInGame is sticky in the engine: Read_INI sets the hide flag on yes and never
+    // clears it (gamemd 0x460e07), so a map override of no leaves a rules-invisible
+    // building undrawn.
+    const stickyInvisible = mf.Sections.filter(
+      (s) => this._rules.getSection(s.Name)?.readBool('InvisibleInGame') === true,
+    ).map((s) => s.Name);
     this._rules.mergeWith(mf);
+    for (const name of stickyInvisible) this._rules.getSection(name)!.setValue('InvisibleInGame', 'yes');
 
     return true;
   }
@@ -193,15 +212,27 @@ export class MapRenderer {
       this._overlayObjects.push(ovl);
     }
 
+    // A skirmish game creates only the players' houses, Neutral and Special; a pre-placed object
+    // owned by a country is never created (the Americans lamps, civilians and buildings on the
+    // multiplayer maps stay absent in captures). Trigger-captured objects carry the "<Player @ X>"
+    // owner the pre-capture pass gave them.
+    const skirmish =
+      this._config.Engine >= EngineType.RedAlert2 &&
+      (mf.getSection('Basic')?.readBool('MultiplayerOnly') ?? false);
+    const exists = (owner: string) =>
+      !skirmish || owner === 'Neutral' || owner === 'Special' || owner.startsWith('<Player');
+
     // import infantry
     for (const i of mf.Infantries) {
-      const inf = new InfantryObject(i.Owner, i.Name, i.Health, i.Direction, i.OnBridge);
+      if (!exists(i.Owner)) continue;
+      const inf = new InfantryObject(i.Owner, i.Name, i.Health, i.Direction, i.SubCell, i.OnBridge);
       const tile = this._tiles.getTile(i.Tile!);
       if (tile != null) tile.AddObject(inf);
       this._infantryObjects.push(inf);
     }
 
     for (const u of mf.Units) {
+      if (!exists(u.Owner)) continue;
       const un = new UnitObject(u.Owner, u.Name, u.Health, u.Direction, u.OnBridge);
       const tile = this._tiles.getTile(u.Tile!);
       if (tile != null) tile.AddObject(un);
@@ -209,6 +240,7 @@ export class MapRenderer {
     }
 
     for (const a of mf.Aircrafts) {
+      if (!exists(a.Owner)) continue;
       const ac = new AircraftObject(a.Owner, a.Name, a.Health, a.Direction, a.OnBridge);
       const tile = this._tiles.getTile(a.Tile!);
       if (tile != null) tile.AddObject(ac);
@@ -216,10 +248,12 @@ export class MapRenderer {
     }
 
     for (const s of mf.Structures) {
+      if (!exists(s.Owner)) continue;
       const str = new StructureObject(s.Owner, s.Name, s.Health, s.Direction);
       str.Upgrade1 = s.Upgrade1;
       str.Upgrade2 = s.Upgrade2;
       str.Upgrade3 = s.Upgrade3;
+      str.PreCaptured = s.PreCaptured;
       const tile = this._tiles.getTile(s.Tile!);
       if (tile != null) tile.AddObject(str);
       this._structureObjects.push(str);
@@ -284,21 +318,16 @@ export class MapRenderer {
     this._theater = new Theater(this._theaterType, this._config, this._vfs, this._rules, this._art);
     if (!this._theater.Initialize()) return false;
 
-    // needs to be done before drawables are set
-    let disableOreRandomizing = false;
-    const extra = this._config.ExtraOptions[0];
-    if (extra != null) disableOreRandomizing = extra.DisableOreRandomization;
-    if (!disableOreRandomizing) Operations.RecalculateOreSpread(this._overlayObjects, this._config.Engine);
-
     this.RemoveUnknownObjects();
     this.SetDrawables();
+    this.ExpandSmudgeFootprints();
 
     this.LoadColors();
     if (this._config.Engine >= EngineType.RedAlert2) this.LoadCountries();
     this.LoadHouses();
 
     Operations.FixTiles(this._tiles, this._theater.GetTileCollection());
-    if (this._config.Engine <= EngineType.Firestorm) Operations.RecalculateVeinsSpread(this._overlayObjects, this._tiles);
+    if (this._config.Engine <= EngineType.Firestorm) Operations.RecalculateVeinsSpread(this._overlayObjects);
 
     this.RevisitWallBuildings();
 
@@ -309,6 +338,7 @@ export class MapRenderer {
       this.LoadLightSources();
       this.ApplyLightSources();
     }
+    this.LightTunnelRoofs();
 
     this.SetBaseTiles();
 
@@ -411,6 +441,37 @@ export class MapRenderer {
         }
         obj.WallBuildingFrame = frame;
       }
+    }
+
+    // Overlay walls (RA2 sandbags and walls): the stored overlay value is the connection frame,
+    // but hand-edited maps carry stale pieces — connections to walls that were deleted and
+    // missing connections to walls added later — while the game resolves the piece from the
+    // current neighbours. Bits are the four edge neighbours: 1=north(0,-1), 2=east(+1,0),
+    // 4=south(0,+1), 8=west(-1,0); any wall type connects, as do gates and wall towers.
+    for (const obj of this._overlayObjects) {
+      if (obj.Drawable == null || !obj.Drawable.IsWall || obj.Tile == null) continue;
+      let frame = 0;
+      const dirs = [
+        [0, -1, 1],
+        [1, 0, 2],
+        [0, 1, 4],
+        [-1, 0, 8],
+      ] as const;
+      for (const [dx, dy, bit] of dirs) {
+        const n = this._tiles.GetTileR(obj.Tile.Rx + dx, obj.Tile.Ry + dy);
+        if (n == null) continue;
+        if (
+          n.AllObjects.some(
+            (o) =>
+              (o instanceof OverlayObject && o.Drawable != null && o.Drawable.IsWall) ||
+              (o instanceof StructureObject &&
+                o.Drawable != null &&
+                (o.Drawable.IsWall || o.Drawable.IsGate || o.Name === WallTower)),
+          )
+        )
+          frame |= bit;
+      }
+      obj.WallBuildingFrame = frame;
     }
   }
 
@@ -526,8 +587,11 @@ export class MapRenderer {
   }
 
   private SetDrawables(): void {
+    const tileTypes = this._theater.GetTileCollection();
+    let unknownTiles = 0;
     for (const tile of this._tiles) {
       tile.Drawable = this._theater.GetCollection(CollectionType.Tiles).GetDrawable(tile);
+      if (tile.Drawable == null) unknownTiles++;
       for (const obj of tile.AllObjects) {
         obj.Collection = this._theater.GetObjectCollection(obj);
         if (obj.Collection == null) {
@@ -535,6 +599,37 @@ export class MapRenderer {
           continue;
         }
         obj.Drawable = obj.Collection.GetDrawable(obj);
+
+        if (obj instanceof OverlayObject) Operations.ApplyTiberiumArt(tile, obj, this._config.Engine);
+      }
+    }
+    if (unknownTiles > 0)
+      logger.warn(
+        `${unknownTiles} cells use tile indices beyond this theater's ${tileTypes.NumTiles} tiles (a terrain expansion this game data lacks); they stay black`,
+      );
+  }
+
+  // gamemd draws a multi-cell smudge once from every cell of its foundation (CellClass::Draw_It
+  // 0x480350 -> SmudgeTypeClass::DrawIt 0x6b55f0): each copy at the entry cell's screen spot, lifted
+  // by the drawing cell's own level and lit by that cell. The copies get their own objects so the
+  // tile pass draws them in the game's cell order with the drawing cell's height and palette.
+  private ExpandSmudgeFootprints(): void {
+    for (const sm of this._smudgeObjects) {
+      if (sm.Tile == null) continue;
+      const fnd = sm.Drawable?.Foundation ?? new Size(1, 1);
+      for (let j = 0; j < fnd.Height; j++) {
+        for (let i = 0; i < fnd.Width; i++) {
+          if (i === 0 && j === 0) continue;
+          const tile = this._tiles.GetTileR(sm.Tile!.Rx + i, sm.Tile!.Ry + j);
+          if (tile == null) continue;
+          const copy = new SmudgeObject(sm.Name);
+          copy.FoundationCell = new Point(i, j);
+          copy.Collection = sm.Collection;
+          copy.Drawable = sm.Drawable;
+          copy.BottomTile = tile;
+          copy.TopTile = tile;
+          tile.AddObject(copy);
+        }
       }
     }
   }
@@ -558,6 +653,14 @@ export class MapRenderer {
     // get the default palettes
     const pc = this._theater.GetPalettes();
     for (const p of pc) this._palettesToBeRecalculated.add(p);
+
+    // InfantryClass/UnitClass/AircraftClass::Draw_It add the [AudioVisual] Extra*Light of their
+    // class to the cell brightness (gamemd 0x51944d, 0x73d0c9, 0x41492a; rulesmd.ini has 0.2 for
+    // all three), so units draw a shade lighter than the ground they stand on
+    const audioVisual = this._rules.getOrCreateSection('AudioVisual');
+    const extraUnitLight = audioVisual.readDouble('ExtraUnitLight');
+    const extraInfantryLight = audioVisual.readDouble('ExtraInfantryLight');
+    const extraAircraftLight = audioVisual.readDouble('ExtraAircraftLight');
 
     for (const tile of this._tiles) {
       if (tile == null) continue;
@@ -585,6 +688,9 @@ export class MapRenderer {
           p = this._theater.GetPalette(obj.Drawable as any).clone();
           const z = obj.Tile!.Z + (obj.Drawable != null ? obj.Drawable.TileElevation : 0);
           p.applyLighting(this._lighting, z, lt === LightingType.Full);
+          if (obj instanceof InfantryObject) p.addLight(extraInfantryLight);
+          else if (obj instanceof UnitObject) p.addLight(extraUnitLight);
+          else if (obj instanceof AircraftObject) p.addLight(extraAircraftLight);
         } else {
           p = this._theater.GetPalette(obj.Drawable as any).clone();
         }
@@ -650,6 +756,11 @@ export class MapRenderer {
       if (section != null && section.hasKey('LightVisibility')) {
         const ls = new LightSource(section, this._lighting);
         ls.Tile = s.Tile;
+        const fnd = s.Drawable?.Foundation ?? new Size(1, 1);
+        ls.PosX = s.Tile!.Rx + (fnd.Width - 1) * 0.5;
+        ls.PosY = s.Tile!.Ry + (fnd.Height - 1) * 0.5;
+        const mapSection = this._mapFile.getSection(s.Name);
+        if (mapSection != null) ls.truncateKeysOmittedBy(mapSection);
         this._lightSources.push(ls);
       }
     }
@@ -677,6 +788,27 @@ export class MapRenderer {
       }
     }
     logger.debug(`Determined palettes to be recalculated due to lightsources (${this._palettesToBeRecalculated.size - before})`);
+  }
+
+  // A tunnel piece keeps every cell at the road level while its extra image carries the cliff
+  // face and roof above it, so the game lights that roof as the tunnel floor. Light the extra
+  // art like the highest cardinal neighbour instead, the plateau it belongs to.
+  private LightTunnelRoofs(): void {
+    const coll = this._theater.GetTileCollection();
+    for (const t of this._tiles) {
+      if (t == null || !coll.IsTunnel(t.SetNum)) continue;
+      const img = (t.Drawable as TileDrawable | null)?.GetTileImage(t);
+      if (img == null || !img.hasExtraData) continue;
+      let top: MapTile | null = null;
+      for (const n of [
+        this._tiles.GetTileR(t.Rx - 1, t.Ry),
+        this._tiles.GetTileR(t.Rx + 1, t.Ry),
+        this._tiles.GetTileR(t.Rx, t.Ry - 1),
+        this._tiles.GetTileR(t.Rx, t.Ry + 1),
+      ])
+        if (n != null && n.Z > t.Z && (top == null || n.Z > top.Z)) top = n;
+      if (top != null) t.ExtraPalette = top.Palette;
+    }
   }
 
   private RecalculatePalettes(): void {
@@ -817,7 +949,7 @@ export class MapRenderer {
     for (const entry of colorsSection.OrderedEntries) {
       const colorComponents = entry.Value.toString().split(',');
       const h = new HsvColor(parseInt(colorComponents[0], 10), parseInt(colorComponents[1], 10), parseInt(colorComponents[2], 10));
-      this._namedColors.set(entry.Key, h.toRGB());
+      this._namedColors.set(entry.Key, h);
     }
   }
 
@@ -836,6 +968,29 @@ export class MapRenderer {
         else this._countryColors.set(v.Value.toString(), this._namedColors.get('LightGrey')!);
       }
     }
+
+    // Last in LoadTheater, so nothing overwrites these. An unknown colour name falls back to
+    // the neutral grey the object would have had anyway.
+    const slotOwners = this.PreCaptureColors == null ? null : this.PreCaptureSlotOwners();
+    for (let i = 0; slotOwners != null && i < slotOwners.length; i++) {
+      if (slotOwners[i] == null) continue;
+      const colorName = this.PreCaptureColors![i];
+      this._countryColors.set(
+        slotOwners[i]!,
+        colorName != null && this._namedColors.has(colorName) ? this._namedColors.get(colorName)! : this._namedColors.get('LightGrey')!,
+      );
+    }
+  }
+
+  /// <summary>The owner name given to objects handed to each start position, or null for a
+  /// slot with no colour. FinalSun's own label for the house, so a render log reads plainly.</summary>
+  private PreCaptureSlotOwners(): (string | null)[] {
+    const owners: (string | null)[] = [];
+    for (let i = 0; i < this.PreCaptureColors!.length; i++) {
+      const color = this.PreCaptureColors![i];
+      owners.push(color == null || color === '' ? null : `<Player @ ${String.fromCharCode(65 + i)}>`);
+    }
+    return owners;
   }
 
   private LoadCountries(): void {
@@ -850,9 +1005,13 @@ export class MapRenderer {
     for (const entry of countriesSection.OrderedEntries) {
       const countrySection = this._rules.getSection(entry.Value.toString());
       if (countrySection == null) continue;
-      let c: Color;
-      const colorName = countrySection.readString('Color');
-      if (!this._namedColors.has(colorName)) c = this._namedColors.values().next().value as Color;
+      // the game draws the civilian houses in LightGrey whatever their Color= says
+      const colorName =
+        entry.Value.toString() === 'Neutral' || entry.Value.toString() === 'Special'
+          ? 'LightGrey'
+          : countrySection.readString('Color');
+      let c: HsvColor;
+      if (!this._namedColors.has(colorName)) c = this._namedColors.values().next().value as HsvColor;
       else c = this._namedColors.get(colorName)!;
       this._countryColors.set(entry.Value.toString(), c);
     }
@@ -883,14 +1042,15 @@ export class MapRenderer {
           const height = Math.trunc(this._config.TileHeight * markerSize);
 
           if (this.StartPosMarking === StartPositionMarking.Ellipsed) {
-            fillEllipse(this._drawingSurface, startX + width / 2, startY + height / 2, width, height, 255, 0, 0, opacity);
+            // fillEllipse takes radii; the game's ellipse is width x height across
+            fillEllipse(this._drawingSurface, startX + width / 2, startY + height / 2, width / 2, height / 2, 255, 0, 0, opacity);
           } else {
             width = Math.trunc(width / 2);
             const nstartX = centerX - Math.trunc(halfWidth / 2);
             if (this.StartPosMarking === StartPositionMarking.Squared) {
               fillRect(this._drawingSurface, nstartX, startY, width, height, 255, 0, 0, opacity);
             } else {
-              fillEllipse(this._drawingSurface, nstartX + width / 2, startY + height / 2, width, height, 255, 0, 0, opacity);
+              fillEllipse(this._drawingSurface, nstartX + width / 2, startY + height / 2, width / 2, height / 2, 255, 0, 0, opacity);
             }
           }
         } else if (this.StartPosMarking === StartPositionMarking.Diamond) {
@@ -1016,7 +1176,7 @@ export class MapRenderer {
     for (let i = 0; i < tiberiums.length; i++) {
       const type = stringToOverlayTibType(tiberiums[i]);
       const namedColor = remaps[i];
-      if (this._namedColors.has(namedColor)) markerPalettes.set(type, Palette.makePalette(this._namedColors.get(namedColor)!));
+      if (this._namedColors.has(namedColor)) markerPalettes.set(type, Palette.makePalette(this._namedColors.get(namedColor)!.toRGB()));
     }
 
     for (const o of this._overlayObjects) {
@@ -1073,18 +1233,13 @@ export class MapRenderer {
 
   Draw(): void {
     this._drawingSurface = new DrawingSurface(this.FullSize.Width * this._config.TileWidth, this.FullSize.Height * this._config.TileHeight);
+    this._drawingSurface.TrackVoxelMask = this.TrackVoxelMask;
 
     let lastReported = 0.0;
     for (let y = 0; y < this.FullSize.Height; y++) {
       logger.trace(`Drawing tiles row ${y}`);
-      for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
-        const tile = this._tiles.GetTile(x, y);
-        if (tile != null) this._theater.Draw(tile, this._drawingSurface);
-      }
-      for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
-        const tile = this._tiles.GetTile(x, y);
-        if (tile != null) this._theater.Draw(tile, this._drawingSurface);
-      }
+      for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
+      for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
 
       if (this.Progress != null)
         this.Progress.Span(20, 20 + Math.trunc((this.Progress.DrawEnd - 20) / 2), y / this.FullSize.Height, 'drawing tiles');
@@ -1096,16 +1251,52 @@ export class MapRenderer {
     }
     logger.info('Tiles drawn');
 
+    // the game's overlay pass (TacticalClass 0x6d6d10) and its terrain pass walk the map from the
+    // bottom row up and left to right; with the strict z-test the earlier drawing keeps a tie, so
+    // this order decides which of two equal-z deck pieces or neighbouring trees shows. Overlay z
+    // (walls, ore, bridge decks) is written before any object is tested, and units, which never
+    // write z, cannot be repainted by an overlay
+    for (let y = this.FullSize.Height - 1; y >= 0; y--) {
+      for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
+      for (let x = 0; x <= this.FullSize.Width * 2 - 2; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
+    }
+    logger.info('Overlays drawn');
+
+    // Tiberian Sun darkens the ground beside cliff and slope pieces with a shadow of their own
+    // (Tactical::Draw_Tile_Shadows). The engine's tile pass has already painted the cell overlays
+    // into its tile surface by then, so the shadow's strict test loses on their pixels and veins
+    // and ore stay bright on darkened ground; that is why the pass runs after the overlays here
+    const tileTypes = this._theater.GetTileCollection();
+    for (let y = 0; y < this.FullSize.Height; y++) {
+      for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) tileTypes.DrawTileShadow(this._tiles.GetTile(x, y), this._drawingSurface);
+      for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) tileTypes.DrawTileShadow(this._tiles.GetTile(x, y), this._drawingSurface);
+    }
+
+    // gamemd draws every TerrainClass before the techno layer (TREE -> BLDG -> ANIM): a tree's
+    // write-only shadow lands on the tile art first and anything standing in front repaints it
+    // with its own z
+    for (let y = this.FullSize.Height - 1; y >= 0; y--) {
+      for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) {
+        const tile = this._tiles.GetTile(x, y);
+        if (tile != null) for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
+      }
+      for (let x = 0; x <= this.FullSize.Width * 2 - 2; x += 2) {
+        const tile = this._tiles.GetTile(x, y);
+        if (tile != null) for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
+      }
+    }
+    logger.info('Terrain objects drawn');
+
     lastReported = 0.0;
     for (let y = 0; y < this.FullSize.Height; y++) {
       logger.trace(`Drawing objects row ${y}`);
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
-        const objs = this.GetObjectsAt(x, y);
-        for (const o of objs) this._theater.Draw(o, this._drawingSurface);
+        for (const o of this.GetObjectsAt(x, y, false))
+          if (!(o instanceof TerrainObject) && !(o instanceof SmudgeObject)) this._theater.Draw(o, this._drawingSurface);
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
-        const objs = this.GetObjectsAt(x, y);
-        for (const o of objs) this._theater.Draw(o, this._drawingSurface);
+        for (const o of this.GetObjectsAt(x, y, false))
+          if (!(o instanceof TerrainObject) && !(o instanceof SmudgeObject)) this._theater.Draw(o, this._drawingSurface);
       }
 
       if (this.Progress != null)
@@ -1116,6 +1307,10 @@ export class MapRenderer {
         lastReported = pct;
       }
     }
+
+    this._drawingSurface.drawDeferredAnims();
+    this._drawingSurface.drawDeferredAlpha();
+
     // Highlight ore & gem fields when requested (marked + redrawn on top).
     if (this.MarkOreFields) {
       logger.info('Highlighting ore and gems');
@@ -1123,6 +1318,20 @@ export class MapRenderer {
       this.RedrawOreAndGems();
     }
     logger.info('Map drawing completed');
+  }
+
+  // the game's tile walk (TacticalClass 0x6d7560, top row down) blits each cell's smudge right after
+  // its tile without a z-test, so the tiles of later cells paint over it and, for a multi-cell
+  // smudge, the copy from the last cell of the foundation ends on top
+  private DrawTilePass(tile: MapTile | null): void {
+    if (tile == null) return;
+    this._theater.Draw(tile, this._drawingSurface);
+    for (const o of tile.AllObjects) if (o instanceof SmudgeObject) this._theater.Draw(o, this._drawingSurface);
+  }
+
+  private DrawCellPass(tile: MapTile | null): void {
+    if (tile == null) return;
+    for (const o of tile.AllObjects) if (o instanceof OverlayObject) this._theater.Draw(o, this._drawingSurface);
   }
 
   GeneratePreviewPack(previewMarkers: PreviewMarkersType, sizeMode: SizeMode, map: IniFile, fixDimensions: boolean): void {
@@ -1183,7 +1392,7 @@ export class MapRenderer {
     const srcRect = this.GetSizePixels(sizeMode);
     const dstRect = new Rectangle(0, 0, pw, ph);
     let preview = this._drawingSurface.copyRegion(srcRect);
-    preview = resizeBilinear(preview, pw, ph);
+    preview = resizeBicubic(preview, pw, ph);
 
     switch (previewMarkers) {
       case PreviewMarkersType.None:
@@ -1204,21 +1413,21 @@ export class MapRenderer {
   DebugDrawTile(tile: MapTile): void {
     this._theater.Draw(tile, this._drawingSurface);
     for (const o of this.GetObjectsAt(tile.Dx, Math.trunc(tile.Dy / 2))) this._theater.Draw(o, this._drawingSurface);
-    Operations.CountNeighbouringVeins(tile, Operations.IsVeins);
   }
 
-  GetObjectsAt(dx: number, dy: number): GameObject[] {
+  GetObjectsAt(dx: number, dy: number, includeOverlays = true): GameObject[] {
     const tile = this._tiles.GetTile(dx, dy);
     if (tile == null) return [];
     const ret: GameObject[] = [];
     for (const o of tile.AllObjects) if (o instanceof SmudgeObject) ret.push(o);
-    for (const o of tile.AllObjects) if (o instanceof OverlayObject && (o.Drawable == null || !o.Drawable.Overrides)) ret.push(o);
+    // the main draw handles overlays in the terrain pass; localized redraws
+    // (ore markers, tiled start positions) still want them here
+    if (includeOverlays) for (const o of tile.AllObjects) if (o instanceof OverlayObject) ret.push(o);
     for (const o of tile.AllObjects) if (o instanceof TerrainObject) ret.push(o);
     for (const o of tile.AllObjects) if (o instanceof InfantryObject) ret.push(o);
     for (const o of tile.AllObjects) if (o instanceof UnitObject) ret.push(o);
     for (const o of tile.AllObjects) if (o instanceof StructureObject) ret.push(o);
     for (const o of tile.AllObjects) if (o instanceof AircraftObject) ret.push(o);
-    for (const o of tile.AllObjects) if (o instanceof OverlayObject && o.Drawable != null && o.Drawable.Overrides) ret.push(o);
     return ret;
   }
 
@@ -1230,6 +1439,127 @@ export class MapRenderer {
   }
   GetTheater(): Theater {
     return this._theater;
+  }
+
+  /// <summary>Iso tile dimensions in pixels; 60x30 for RA2/YR, 48x24 for TS/FS.</summary>
+  get TileWidth(): number {
+    return this._config.TileWidth;
+  }
+  get TileHeight(): number {
+    return this._config.TileHeight;
+  }
+
+  /// <summary>Start waypoints with their cell and the pixel centre of that cell on the
+  /// drawing surface. Subtract the saved image's crop origin to reach coordinates in the
+  /// saved file. Used to align a render against an engine capture of the same map.</summary>
+  GetStartPositionPixels(): StartPositionPixel[] {
+    const positions: StartPositionPixel[] = [];
+    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < 8).sort((a, b) => a.Number - b.Number)) {
+      const t = this._tiles.getTile(w.Tile);
+      if (t == null) continue;
+      const sp = new StartPositionPixel();
+      sp.Number = w.Number;
+      sp.Rx = t.Rx;
+      sp.Ry = t.Ry;
+      sp.Z = t.Z;
+      sp.X = Math.trunc(((t.Dx + 1) * this._config.TileWidth) / 2);
+      sp.Y = Math.trunc(((t.Dy - t.Z + 1) * this._config.TileHeight) / 2);
+      positions.push(sp);
+    }
+    return positions;
+  }
+
+  /// <summary>Derives map statistics for --meta-json. Requires rules to still be loaded,
+  /// so call before FreeUseless.</summary>
+  ComputeStats(): MapStats {
+    const stats = new MapStats();
+    const coll = this._theater.GetTileCollection();
+    const cliffSets = new Set<number>([
+      coll.CliffSet,
+      coll.WaterCliffs,
+      coll.DestroyableCliffs,
+      coll.WaterCliffAPieces,
+      coll.MMWaterCliffAPieces,
+      coll.CrystalCliff,
+    ]);
+    const rampSets = new Set<number>([
+      coll.RampBase,
+      coll.RampSmooth,
+      coll.SlopeSetPieces,
+      coll.SlopeSetPieces2,
+      coll.CliffRamps,
+      coll.PavedRoadSlopes,
+      coll.DirtRoadSlopes,
+      coll.MonorailSlopes,
+    ]);
+    cliffSets.delete(-1);
+    rampSets.delete(-1);
+
+    stats.HeightMin = 0x7fffffff; // int.MaxValue
+    for (const t of this._tiles) {
+      if (t == null) continue;
+      stats.TotalTiles++;
+      if (t.Z < stats.HeightMin) stats.HeightMin = t.Z;
+      if (t.Z > stats.HeightMax) stats.HeightMax = t.Z;
+      if (t.SetNum === -1) continue;
+      if (t.SetNum === coll.WaterSet || (t.SetNum === coll.WaterCaves && coll.WaterCaves !== -1)) stats.WaterTiles++;
+      else if (t.SetNum === coll.ShorePieces) stats.ShoreTiles++;
+      else if (cliffSets.has(t.SetNum)) stats.CliffTiles++;
+      else if (rampSets.has(t.SetNum)) stats.RampTiles++;
+    }
+    if (stats.HeightMin === 0x7fffffff) stats.HeightMin = 0;
+
+    // full ore cell = 12 * Value credits: a cell holds OverlayValue+1 units
+    const oreValue = this._rules.getOrCreateSection('Riparius').readInt('Value', 25);
+    const gemValue = this._rules.getOrCreateSection('Cruentus').readInt('Value', 50);
+    const ore2Value = this._rules.getOrCreateSection('Vinifera').readInt('Value', 25);
+    const ore3Value = this._rules.getOrCreateSection('Aboreus').readInt('Value', 25);
+    for (const ovl of this._overlayObjects) {
+      const tib = SpecialOverlays.GetOverlayTibType(ovl, this._config.Engine);
+      switch (tib) {
+        case OverlayTibType.Ore:
+          stats.OreCells++;
+          stats.TotalCredits += (ovl.OverlayValue + 1) * oreValue;
+          break;
+        case OverlayTibType.Gems:
+          stats.GemCells++;
+          stats.TotalCredits += (ovl.OverlayValue + 1) * gemValue;
+          break;
+        case OverlayTibType.Vinifera:
+          stats.OreCells++;
+          stats.TotalCredits += (ovl.OverlayValue + 1) * ore2Value;
+          break;
+        case OverlayTibType.Aboreus:
+          stats.OreCells++;
+          stats.TotalCredits += (ovl.OverlayValue + 1) * ore3Value;
+          break;
+      }
+      // overlay ids 59/60 are rail bridges in TS but plain train tracks in RA2/YR
+      if (
+        SpecialOverlays.IsHighBridge(ovl) ||
+        (this._config.Engine <= EngineType.Firestorm && SpecialOverlays.IsTSHighRailsBridge(ovl)) ||
+        (ovl.Drawable != null && ovl.Drawable.Name.toUpperCase().startsWith('LOBRDG'))
+      )
+        stats.HasBridges = true;
+    }
+
+    for (const s of this._structureObjects) {
+      stats.Structures++;
+      const rs = this._rules.getSection(s.Name);
+      if (rs == null) continue;
+      if (rs.readBool('NeedsEngineer')) {
+        stats.TechStructures++;
+        stats.TechStructureTypes.set(s.Name, (stats.TechStructureTypes.get(s.Name) ?? 0) + 1);
+      }
+      if (rs.readBool('CanBeOccupied')) stats.GarrisonableStructures++;
+    }
+    stats.TerrainObjects = this._terrainObjects.length;
+    stats.OreSpawners = this._terrainObjects.filter((t) => t.Name.toUpperCase().startsWith('TIBTRE')).length;
+    stats.Units = this._unitObjects.length;
+    stats.Infantry = this._infantryObjects.length;
+    stats.Aircraft = this._aircraftObjects.length;
+    stats.Smudges = this._smudgeObjects.length;
+    return stats;
   }
 
   FreeUseless(): void {
@@ -1263,18 +1593,22 @@ export class MapRenderer {
       if (tmp == null) {
         logger.warn(
           `Removing tile #${tile.TileNum}@(${tile.Rx},${tile.Ry}) because no tmp file for it was found; set ` +
-            `${drawable.Name} (${drawable.TsEntry?.MemberOfSet.SetName ?? ''}), expected filename ${drawable.TsEntry?.MemberOfSet.FileName ?? ''}xx${ModConfig.ActiveTheater?.Extension ?? ''}`,
+            `${drawable.Name} (${drawable.TsEntry?.MemberOfSet?.SetName ?? ''}), expected filename ${drawable.TsEntry?.MemberOfSet?.FileName ?? ''}xx${ModConfig.ActiveTheater?.Extension ?? ''}`,
         );
         brokenTiles++;
         this.ChangeTileToClear(coll, tile);
       } else {
-        if (!drawable.DoesSubTileExist(tile)) {
-          logger.warn(
-            `Removing tile-subtile,count #${tile.TileNum}-${tile.SubTile}@(${tile.Rx},${tile.Ry}) because subtile for it was not found; set ` +
-              `${drawable.Name} (${drawable.TsEntry?.MemberOfSet.SetName ?? ''}), expected filename ${drawable.TsEntry?.MemberOfSet.FileName ?? ''}xx${ModConfig.ActiveTheater?.Extension ?? ''}`,
-          );
-          brokenTiles++;
-          this.ChangeTileToClear(coll, tile);
+        try {
+          if (!drawable.DoesSubTileExist(tile)) {
+            logger.warn(
+              `Removing tile-subtile,count #${tile.TileNum}-${tile.SubTile}@(${tile.Rx},${tile.Ry}) because subtile for it was not found; set ` +
+                `${drawable.Name} (${drawable.TsEntry?.MemberOfSet?.SetName ?? ''}), expected filename ${drawable.TsEntry?.MemberOfSet?.FileName ?? ''}xx${ModConfig.ActiveTheater?.Extension ?? ''}`,
+            );
+            brokenTiles++;
+            this.ChangeTileToClear(coll, tile);
+          }
+        } catch {
+          // the game lets a broken tsentry here take the process down; a render should not
         }
       }
     }
@@ -1455,8 +1789,8 @@ export class MapRenderer {
         drawDashedLine(this._drawingSurface, dashlineStart.X, dashlineStart.Y, dashlineEnd.X, dashlineEnd.Y, 3, dashColor.r, dashColor.g, dashColor.b, dashColor.a, dashValues);
       }
 
-      fillEllipse(this._drawingSurface, startTileCenter.X, startTileCenter.Y, 20, 10, 255, 0, 0, 138);
-      fillEllipse(this._drawingSurface, endTileCenter.X, endTileCenter.Y, 20, 10, 255, 0, 0, 138);
+      fillEllipse(this._drawingSurface, startTileCenter.X, startTileCenter.Y, 10, 5, 255, 0, 0, 138);
+      fillEllipse(this._drawingSurface, endTileCenter.X, endTileCenter.Y, 10, 5, 255, 0, 0, 138);
     }
   }
 }
