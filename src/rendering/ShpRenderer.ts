@@ -178,7 +178,6 @@ export class ShpRenderer {
     );
 
     const stride = ds.Stride;
-    const heightBuffer = ds.getHeightBuffer();
     const zBuffer = ds.getZBuffer();
 
     const data = ds.data;
@@ -312,7 +311,6 @@ export class ShpRenderer {
             }
             if (!unitLike) {
               if (!isAnim && !plainBlit) zBuffer[zIdx] = zBufVal;
-              heightBuffer[zIdx] = hBufVal;
             }
           }
         }

@@ -148,6 +148,9 @@ function buildArgs(p) {
     case 'full': args.push('--force-fullmap'); break;
     default: break; // auto
   }
+  if (Number.isInteger(p.previewWidth) && p.previewWidth > 0) {
+    args.push('--preview-width=' + p.previewWidth);
+  }
   switch (p.engine) {
     case 'ra2': args.push('--force-ra2'); break;
     case 'yr': args.push('--force-yr'); break;

@@ -39,7 +39,6 @@ export class TmpRenderer {
     if (tile.SubTile >= tmp.Images.length) return;
     const img = tmp.Images[tile.SubTile];
     const zBuffer = ds.getZBuffer();
-    const heightBuffer = ds.getHeightBuffer();
     const p = tile.Palette;
     let bgr = p.getBgrBytes();
     const zData = img.ZData;
@@ -93,7 +92,6 @@ export class TmpRenderer {
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
           if (useZ) zBuffer[zIdx] = zBufVal;
-          heightBuffer[zIdx] = hBufVal;
         }
         w += 3;
         zIdx++;
@@ -116,7 +114,6 @@ export class TmpRenderer {
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
           if (useZ) zBuffer[zIdx] = zBufVal;
-          heightBuffer[zIdx] = hBufVal;
         }
         w += 3;
         zIdx++;
@@ -169,7 +166,6 @@ export class TmpRenderer {
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
           zBuffer[zIdx] = zBufVal;
-          heightBuffer[zIdx] = img.ExtraHeight - y + hBufVal;
           w += 3;
         } else {
           w += 3;

@@ -1,5 +1,57 @@
 // Simple image resampling for preview generation.
 import { DrawingSurface, SurfaceFormat } from './DrawingSurface.js';
+import { Rectangle } from '../shared/Geometry.js';
+
+/**
+ * Box-filtered downscale of a surface rectangle. Unlike resizeBicubic, the
+ * sample count per destination pixel is bounded (max 4x4), so a 500x500 map's
+ * 30000x15000 surface turns into a preview in bounded time and memory.
+ */
+export function resizeRegionBox(
+  src: DrawingSurface,
+  rect: Rectangle,
+  newWidth: number,
+  newHeight: number,
+): DrawingSurface {
+  const dst = new DrawingSurface(newWidth, newHeight, SurfaceFormat.Bgr24);
+  const xRatio = rect.Width / newWidth;
+  const yRatio = rect.Height / newHeight;
+
+  for (let y = 0; y < newHeight; y++) {
+    const sy0 = rect.Top + Math.floor(y * yRatio);
+    const sy1 = Math.min(rect.Top + rect.Height, rect.Top + Math.ceil((y + 1) * yRatio));
+    const sySpan = Math.max(1, sy1 - sy0);
+    const syCount = Math.min(4, sySpan);
+    for (let x = 0; x < newWidth; x++) {
+      const sx0 = rect.Left + Math.floor(x * xRatio);
+      const sx1 = Math.min(rect.Left + rect.Width, rect.Left + Math.ceil((x + 1) * xRatio));
+      const sxSpan = Math.max(1, sx1 - sx0);
+      const sxCount = Math.min(4, sxSpan);
+
+      let b = 0;
+      let g = 0;
+      let r = 0;
+      let count = 0;
+      for (let yy = 0; yy < syCount; yy++) {
+        const sy = sy0 + Math.floor(((yy + 0.5) * sySpan) / syCount);
+        for (let xx = 0; xx < sxCount; xx++) {
+          const sx = sx0 + Math.floor(((xx + 0.5) * sxSpan) / sxCount);
+          const si = (sy * src.Width + sx) * 3;
+          b += src.data[si];
+          g += src.data[si + 1];
+          r += src.data[si + 2];
+          count++;
+        }
+      }
+
+      const di = (y * newWidth + x) * 3;
+      dst.data[di] = Math.round(b / count);
+      dst.data[di + 1] = Math.round(g / count);
+      dst.data[di + 2] = Math.round(r / count);
+    }
+  }
+  return dst;
+}
 
 export function resizeBilinear(src: DrawingSurface, newWidth: number, newHeight: number): DrawingSurface {
   const dst = new DrawingSurface(newWidth, newHeight, SurfaceFormat.Bgr24);

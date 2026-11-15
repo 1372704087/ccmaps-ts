@@ -23,6 +23,7 @@ import { Operations } from './map/Operations.js';
 import { FrameDeciders } from './game/FrameDeciders.js';
 import { RenderProgress } from './RenderProgress.js';
 import { Palette } from '../rendering/Palette.js';
+import { resizeRegionBox } from '../rendering/ImageUtil.js';
 import { Rand } from '../shared/Util.js';
 import type { DrawingSurface } from '../rendering/DrawingSurface.js';
 
@@ -162,7 +163,24 @@ export class RenderEngine {
     // stats need the rules, which FreeUseless disposes below
     const mapStats = settings.MetadataOutFile !== '' ? renderer.ComputeStats() : null;
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    renderer.GetDrawingSurface().savePNG(outPath, settings.PNGQuality, saveRect.Left, saveRect.Top, saveRect.Width, saveRect.Height);
+    const surface = renderer.GetDrawingSurface();
+    let outputSurface = surface;
+    let outputRect = saveRect;
+    if (settings.PreviewWidth > 0 && saveRect.Width > settings.PreviewWidth) {
+      const targetWidth = settings.PreviewWidth;
+      const targetHeight = Math.max(1, Math.round((saveRect.Height * targetWidth) / saveRect.Width));
+      outputSurface = resizeRegionBox(surface, saveRect, targetWidth, targetHeight);
+      outputRect = new Rectangle(0, 0, targetWidth, targetHeight);
+      logger.info(`Downscaling saved PNG to ${targetWidth}x${targetHeight}`);
+    }
+    outputSurface.savePNG(
+      outPath,
+      settings.PNGQuality,
+      outputRect.Left,
+      outputRect.Top,
+      outputRect.Width,
+      outputRect.Height,
+    );
     logger.info(`Saved ${outPath}`);
 
     if (settings.MetadataOutFile !== '')
@@ -345,16 +363,9 @@ export class RenderEngine {
     try {
       const basic = mapFile.getSection('Basic');
 
-      // start waypoints counted straight from the ini: MapFile.Waypoints is gated on
-      // MultiplayerOnly, but maps missing that flag still carry playable starts
-      let startPositions = 0;
-      const wpSection = mapFile.getSection('Waypoints');
-      if (wpSection != null) {
-        for (const kv of wpSection.OrderedEntries) {
-          if (/^-?\d+$/.test(kv.Key) && parseInt(kv.Key, 10) < 8 && /^-?\d+$/.test(kv.Value.toString()))
-            startPositions++;
-        }
-      }
+      // VERA20k maps declare their starts with [Basic] MaxPlayers plus a complete
+      // waypoint run; ordinary maps keep the native 0..7 range.
+      const startPositions = mapFile.StartCapacity;
 
       const techStructureTypes: Record<string, number> = {};
       if (stats != null)

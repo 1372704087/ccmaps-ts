@@ -22,8 +22,8 @@ export class DrawingSurface {
 
   readonly data: Uint8Array; // BGR triplets
   readonly zBuffer: Int16Array;
-  readonly heightBuffer: Int32Array;
-  readonly shadowBuffer: Uint8Array; // 0/1
+  /** Allocated only for maps that actually draw voxel shadows. */
+  private _shadowBuffer: Uint8Array | null = null;
 
   /// <summary>Set before drawing to have the voxel blit record which pixels it wrote. Off by
   /// default: the buffer costs a byte per pixel and only A/B diagnostics read it.</summary>
@@ -69,8 +69,6 @@ export class DrawingSurface {
 
     this.data = new Uint8Array(width * height * this.BytesPerPixel);
     this.zBuffer = new Int16Array(width * height);
-    this.heightBuffer = new Int32Array(width * height);
-    this.shadowBuffer = new Uint8Array(width * height);
   }
 
   pixelIndex(x: number, y: number): number {
@@ -78,23 +76,19 @@ export class DrawingSurface {
   }
 
   isShadow(x: number, y: number): boolean {
-    return this.shadowBuffer[this.pixelIndex(x, y)] !== 0;
+    return (this._shadowBuffer?.[this.pixelIndex(x, y)] ?? 0) !== 0;
   }
 
   setShadow(x: number, y: number): void {
-    this.shadowBuffer[this.pixelIndex(x, y)] = 1;
+    (this._shadowBuffer ??= new Uint8Array(this.Width * this.Height))[this.pixelIndex(x, y)] = 1;
   }
 
   getShadows(): Uint8Array {
-    return this.shadowBuffer;
+    return (this._shadowBuffer ??= new Uint8Array(this.Width * this.Height));
   }
 
   getZBuffer(): Int16Array {
     return this.zBuffer;
-  }
-
-  getHeightBuffer(): Int32Array {
-    return this.heightBuffer;
   }
 
   /// <summary>Pixels drawn by the voxel rasteriser, or null when tracking is off. The game shades

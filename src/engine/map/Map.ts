@@ -77,6 +77,8 @@ export class MapRenderer {
 
   FullSize = Rectangle.Empty;
   LocalSize = Rectangle.Empty;
+  /** Starts admitted by the map metadata (8 retail, up to 30 with VERA20k). */
+  StartCapacity = 8;
   Progress: RenderProgress | null = null;
 
   private _config!: ModConfig;
@@ -114,6 +116,7 @@ export class MapRenderer {
     this._theaterType = Theater.TheaterTypeFromString(mf.readString('Map', 'Theater'));
     this.FullSize = mf.FullSize;
     this.LocalSize = mf.LocalSize;
+    this.StartCapacity = mf.StartCapacity;
 
     this._tiles = new TileLayer(this.FullSize.Size, config);
 
@@ -881,7 +884,7 @@ export class MapRenderer {
         delta2 = 3;
         break;
     }
-    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < 8)) {
+    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < this.StartCapacity)) {
       for (let x = w.Tile.Rx + delta1; x < w.Tile.Rx + delta2; x++) {
         for (let y = w.Tile.Ry + delta1; y < w.Tile.Ry + delta2; y++) {
           const t = this._tiles.GetTileR(x, y);
@@ -892,7 +895,7 @@ export class MapRenderer {
   }
 
   RedrawTiledStartPositions(reset = false): void {
-    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < 8)) {
+    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < this.StartCapacity)) {
       for (let x = w.Tile.Rx - 5; x < w.Tile.Rx + 5; x++) {
         for (let y = w.Tile.Ry - 5; y < w.Tile.Ry + 5; y++) {
           const t = this._tiles.GetTileR(x, y);
@@ -913,7 +916,7 @@ export class MapRenderer {
   }
 
   private DrawStartMarkersBittah(canvas: DrawingSurface, fullImage: Rectangle, previewImage: Rectangle): void {
-    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < 8)) {
+    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < this.StartCapacity)) {
       const t = this._tiles.getTile(w.Tile);
       if (t == null) continue;
       const center = new Point(Math.trunc((t.Dx * this._config.TileWidth) / 2), Math.trunc(((t.Dy - t.Z) * this._config.TileHeight) / 2));
@@ -929,7 +932,7 @@ export class MapRenderer {
   }
 
   private DrawStartMarkersAro(canvas: DrawingSurface, fullImage: Rectangle, previewImage: Rectangle): void {
-    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < 8)) {
+    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < this.StartCapacity)) {
       const t = this._tiles.getTile(w.Tile);
       if (t == null) continue;
       const center = new Point(Math.trunc((t.Dx * this._config.TileWidth) / 2), Math.trunc(((t.Dy - t.Z) * this._config.TileHeight) / 2));
@@ -1021,7 +1024,7 @@ export class MapRenderer {
     logger.info('Marking start positions');
     const markerSize = this.StartMarkerSize ?? 4.0;
     for (const entry of this._wayPoints) {
-      if (entry.Number < 8) {
+      if (entry.Number < this.StartCapacity) {
         const t = this._tiles.getTile(entry.Tile);
         if (t == null) continue;
         const centerX = Math.trunc(((t.Dx + 1) * this._config.TileWidth) / 2);
@@ -1454,7 +1457,7 @@ export class MapRenderer {
   /// saved file. Used to align a render against an engine capture of the same map.</summary>
   GetStartPositionPixels(): StartPositionPixel[] {
     const positions: StartPositionPixel[] = [];
-    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < 8).sort((a, b) => a.Number - b.Number)) {
+    for (const w of this._wayPoints.filter((w) => w.Tile != null && w.Number < this.StartCapacity).sort((a, b) => a.Number - b.Number)) {
       const t = this._tiles.getTile(w.Tile);
       if (t == null) continue;
       const sp = new StartPositionPixel();
@@ -1633,20 +1636,20 @@ export class MapRenderer {
   }
 
   FixupOverlays(): void {
-    // Byte arrays of 256KB fixed size
-    const overlayPack = new Uint8Array(1 << 18);
-    const overlayDataPack = new Uint8Array(1 << 18);
+    // The plane width follows [Map] Size on VERA20k maps (512 retail, 1024 extended).
+    const side = this._mapFile.GridSide;
+    const overlayPack = new Uint8Array(side * side);
+    const overlayDataPack = new Uint8Array(side * side);
 
     if (this._overlaysAltered) {
-      for (let x = 0; x < 262144; x++) {
-        overlayPack[x] = 255;
-        overlayDataPack[x] = 0;
-      }
+      overlayPack.fill(255);
 
       for (const obj of [...this._overlayObjects]) {
-        const location = obj.Tile!.Ry * 512 + obj.Tile!.Rx;
-        overlayPack[location] = obj.OverlayID;
-        overlayDataPack[location] = obj.OverlayValue;
+        const location = obj.Tile!.Ry * side + obj.Tile!.Rx;
+        if (location < overlayPack.length) {
+          overlayPack[location] = obj.OverlayID;
+          overlayDataPack[location] = obj.OverlayValue;
+        }
       }
 
       const oPackEncoded = Buffer.from(Format5.Encode(overlayPack, 80)).toString('base64');

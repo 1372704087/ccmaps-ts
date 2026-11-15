@@ -35,6 +35,10 @@ function decodePackBase64(s: string): Buffer {
 export class MapFile extends IniFile {
   FullSize = Rectangle.Empty;
   LocalSize = Rectangle.Empty;
+  /** VERA20k extends the fixed 512 cell grid to 1024 when [Map] Size width+height > 512. */
+  GridSide = 512;
+  /** Player starts admitted by [Basic] MaxPlayers / a complete waypoint run 0..N-1. */
+  StartCapacity = 0;
 
   Tiles!: TileLayer;
   Overlays: Overlay[] = [];
@@ -77,6 +81,9 @@ export class MapFile extends IniFile {
       parseInt(size[2], 10),
       parseInt(size[3], 10),
     );
+    // VERA20k's map format rule: width+height picks the cell plane. Retail maps
+    // keep 512; larger maps use the 1024-cell extension.
+    this.GridSide = this.FullSize.Width + this.FullSize.Height > 512 ? 1024 : 512;
 
     logger.info('Reading map');
     logger.debug('Reading tiles');
@@ -105,6 +112,13 @@ export class MapFile extends IniFile {
 
     logger.debug('Waypoints');
     this.readWaypoints();
+    // The capacity query must still work when ReadWaypoints is gated off by a
+    // missing MultiplayerOnly flag; metadata readers keep its old behaviour.
+    const basic = this.getSection('Basic');
+    const waypointSection = this.getSection('Waypoints');
+    this.StartCapacity = basic != null && waypointSection != null
+      ? MapFile.ComputeStartCapacity(basic, waypointSection)
+      : 0;
 
     logger.debug('Reading tunnels');
     this.readTubes();
@@ -126,7 +140,7 @@ export class MapFile extends IniFile {
     const isoMapPack = new Uint8Array(lzoPackSize);
 
     // In case IsoMapPack5 contains less entries than the number of cells, fill up any number greater
-    // than 511 and filter later.
+    // than the cell grid and filter later.
     let j = 0;
     for (let i = 0; i < cells; i++) {
       isoMapPack[j] = 0x88;
@@ -175,7 +189,7 @@ export class MapFile extends IniFile {
 
       if (tilenum >= 65535) tilenum = 0; // Tile 0xFFFF used as empty/clear
 
-      if (rx <= 511 && ry <= 511) {
+      if (rx < this.GridSide && ry < this.GridSide) {
         const dx = rx - ry + this.FullSize.Width - 1;
         const dy = rx + ry - this.FullSize.Width - 1;
         numtiles++;
@@ -238,7 +252,8 @@ export class MapFile extends IniFile {
       return;
     }
 
-    const overlayPack = new Uint8Array(1 << 18);
+    const side = this.GridSide;
+    const overlayPack = new Uint8Array(side * side).fill(0xff);
     Format5.DecodeInto(decodePackBase64(overlaySection.concatenatedValues()), overlayPack, 80);
 
     const overlayDataSection = this.getSection('OverlayDataPack');
@@ -246,14 +261,14 @@ export class MapFile extends IniFile {
       logger.debug('OverlayDataPack section unavailable, overlay will be unavailable');
       return;
     }
-    const overlayDataPack = new Uint8Array(1 << 18);
+    const overlayDataPack = new Uint8Array(side * side);
     Format5.DecodeInto(decodePackBase64(overlayDataSection.concatenatedValues()), overlayDataPack, 80);
 
     for (let y = 0; y < this.FullSize.Height; y++) {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x--) {
         const t = this.Tiles.get(x, y);
         if (t == null) continue;
-        const idx = t.Rx + 512 * t.Ry;
+        const idx = t.Rx + side * t.Ry;
         const overlay_id = overlayPack[idx];
         if (overlay_id !== 0xff) {
           const overlay_value = overlayDataPack[idx];
@@ -412,6 +427,32 @@ export class MapFile extends IniFile {
     }
   }
 
+  /// <summary>VERA20k admits 9..30 starts only when [Basic] MaxPlayers names
+  /// that count and every waypoint 0..N-1 is authored; ordinary maps keep the
+  /// native 0..7 starts.</summary>
+  private static ComputeStartCapacity(basic: IniSection, waypoints: IniSection): number {
+    const declared = basic.readInt('MaxPlayers', 0);
+    if (declared >= 9 && declared <= 30) {
+      let complete = true;
+      for (let i = 0; i < declared; i++) {
+        const value = waypoints.hasKey(i.toString()) ? waypoints.readInt(i.toString(), 0) : 0;
+        if (value === 0 || value === -1) {
+          complete = false;
+          break;
+        }
+      }
+      if (complete) return declared;
+    }
+
+    let capacity = 0;
+    for (; capacity < 8; capacity++) {
+      if (!waypoints.hasKey(capacity.toString())) break;
+      const value = waypoints.readInt(capacity.toString(), 0);
+      if (value === 0 || value === -1) break;
+    }
+    return capacity;
+  }
+
   private readTubes(): void {
     const tubesSection = this.getSection('Tubes');
     if (tubesSection == null) {
@@ -436,7 +477,7 @@ export class MapFile extends IniFile {
           if (direction < 0 || direction >= 8) break;
           directions.push(direction);
         }
-        if (startx > 0 && startx < 512 && starty > 0 && starty < 512 && facing >= 0 && facing < 8 && endx > 0 && endx < 512 && endy > 0 && endy < 512)
+        if (startx > 0 && startx < this.GridSide && starty > 0 && starty < this.GridSide && facing >= 0 && facing < 8 && endx > 0 && endx < this.GridSide && endy > 0 && endy < this.GridSide)
           this.TunnelEntries.push(new TunnelLine(startx, starty, facing, endx, endy, directions));
       } catch {
         // ignore malformed entries

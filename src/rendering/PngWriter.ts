@@ -1,16 +1,17 @@
 // Port of CNCMaps.Engine.Rendering.PngWriter
 //
 // Writes truecolor (RGB) PNGs with unfiltered (filter-type-0) scanlines, matching
-// the byte layout of the C# writer. Compression is delegated to Node's zlib
-// (deflateSync) which produces a valid single-stream zlib payload; the C# version
-// used a pigz-style parallel deflate but the resulting PNGs are equivalent.
+// the byte layout of the C# writer. Compression is delegated to Node's zlib.
+// Scanlines are compressed in bounded chunks and written as multiple IDAT blocks,
+// so a full-map render never materializes the whole decompressed PNG body in RAM.
 import * as fs from 'node:fs';
-import { deflateSync, deflateSync as _deflate } from 'node:zlib';
+import { constants as zlibConstants, deflateRawSync } from 'node:zlib';
 import { Rectangle } from '../shared/Geometry.js';
 
-void _deflate;
-
 const crcTable = buildCrcTable();
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+/** Rows per compression chunk; the raw buffer stays a few MiB even for huge maps. */
+const MAX_RAW_CHUNK = 4 * 1024 * 1024;
 
 function buildCrcTable(): Uint32Array {
   const table = new Uint32Array(256);
@@ -43,40 +44,69 @@ export class PngWriter {
     rect: Rectangle,
     compressionLevel: number,
   ): void {
-    const rowBytes = rect.Width * 3;
-    const raw = new Uint8Array((rowBytes + 1) * rect.Height);
+    const fd = fs.openSync(path, 'w');
+    try {
+      fs.writeSync(fd, PNG_SIGNATURE);
 
-    // Build the filtered stream: each scanline prefixed with filter type 0, and
-    // pixels converted from BGR memory order to PNG RGB.
-    for (let y = 0; y < rect.Height; y++) {
-      let rawIdx = y * (rowBytes + 1);
-      raw[rawIdx++] = 0; // filter: None
-      let srcIdx = ((rect.Top + y) * surfaceWidth + rect.Left) * bytesPerPixel;
-      for (let x = 0; x < rect.Width; x++) {
-        raw[rawIdx++] = data[srcIdx + 2]; // r
-        raw[rawIdx++] = data[srcIdx + 1]; // g
-        raw[rawIdx++] = data[srcIdx + 0]; // b
-        srcIdx += bytesPerPixel;
+      const ihdr = Buffer.alloc(13);
+      writeBEU32(ihdr, 0, rect.Width);
+      writeBEU32(ihdr, 4, rect.Height);
+      ihdr[8] = 8; // bit depth
+      ihdr[9] = 2; // color type: truecolor
+      fs.writeSync(fd, PngWriter.chunk('IHDR', ihdr));
+
+      // One zlib stream split over multiple IDAT chunks: the header goes in the
+      // first block, the Adler-32 trailer in the last one.
+      const zlibHeader = Buffer.from([0x78, compressionLevel === 0 ? 0x01 : 0x9c]);
+      const rowBytes = rect.Width * 3;
+      const rowsPerChunk = Math.max(1, Math.min(rect.Height, Math.floor(MAX_RAW_CHUNK / (rowBytes + 1))));
+      let adlerA = 1;
+      let adlerB = 0;
+      let first = true;
+
+      for (let top = 0; top < rect.Height; top += rowsPerChunk) {
+        const rows = Math.min(rowsPerChunk, rect.Height - top);
+        const raw = new Uint8Array((rowBytes + 1) * rows);
+        let rawIdx = 0;
+        for (let y = 0; y < rows; y++) {
+          const rowStart = rawIdx;
+          raw[rawIdx++] = 0; // filter: None
+          let srcIdx = ((rect.Top + top + y) * surfaceWidth + rect.Left) * bytesPerPixel;
+          for (let x = 0; x < rect.Width; x++) {
+            raw[rawIdx++] = data[srcIdx + 2]; // r
+            raw[rawIdx++] = data[srcIdx + 1]; // g
+            raw[rawIdx++] = data[srcIdx + 0]; // b
+            srcIdx += bytesPerPixel;
+          }
+          for (let i = rowStart; i < rawIdx; i++) {
+            adlerA += raw[i];
+            adlerB += adlerA;
+            if ((i & 0x3ff) === 0x3ff) {
+              adlerA %= 65521;
+              adlerB %= 65521;
+            }
+          }
+        }
+        adlerA %= 65521;
+        adlerB %= 65521;
+
+        const last = top + rows >= rect.Height;
+        const compressed = deflateRawSync(raw, {
+          level: compressionLevel,
+          finishFlush: last ? zlibConstants.Z_FINISH : zlibConstants.Z_SYNC_FLUSH,
+        });
+        const payload = first ? Buffer.concat([zlibHeader, compressed]) : compressed;
+        fs.writeSync(fd, PngWriter.chunk('IDAT', Buffer.from(payload)));
+        first = false;
       }
+
+      const adler = Buffer.alloc(4);
+      writeBEU32(adler, 0, (((adlerB << 16) | adlerA) >>> 0));
+      fs.writeSync(fd, PngWriter.chunk('IDAT', adler));
+      fs.writeSync(fd, PngWriter.chunk('IEND', Buffer.alloc(0)));
+    } finally {
+      fs.closeSync(fd);
     }
-
-    const idat = deflateSync(raw, { level: compressionLevel });
-
-    const chunks: Buffer[] = [];
-    chunks.push(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-
-    // IHDR: 8-bit truecolor
-    const ihdr = Buffer.alloc(13);
-    writeBEU32(ihdr, 0, rect.Width);
-    writeBEU32(ihdr, 4, rect.Height);
-    ihdr[8] = 8; // bit depth
-    ihdr[9] = 2; // color type: truecolor
-    chunks.push(PngWriter.chunk('IHDR', ihdr));
-
-    chunks.push(PngWriter.chunk('IDAT', Buffer.from(idat)));
-    chunks.push(PngWriter.chunk('IEND', Buffer.alloc(0)));
-
-    fs.writeFileSync(path, Buffer.concat(chunks));
   }
 
   private static chunk(type: string, payload: Buffer): Buffer {
