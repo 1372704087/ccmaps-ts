@@ -183,7 +183,11 @@ export class ShpRenderer {
     const data = ds.data;
     const wLow = 0;
     const wHigh = stride * ds.Height;
-    let w = offset.X * 3 + stride * offset.Y;
+    // banded surfaces hold one strip of the map; the blit keeps the map's own coordinates for
+    // everything that decides depth and only moves the write cursor into surface space
+    const ox = offset.X - ds.OriginX;
+    const oy = offset.Y - ds.OriginY;
+    let w = ox * 3 + stride * oy;
 
     // clip to 25-50-75-100
     transLucency = Math.trunc(transLucency / 25) * 25;
@@ -191,7 +195,7 @@ export class ShpRenderer {
     const blendB = 1 - a;
 
     let rIdx = 0; // image pixel index
-    let zIdx = offset.X + offset.Y * ds.Width; // z-buffer pixel index
+    let zIdx = ox + oy * ds.Width; // z-buffer pixel index
     let hBufVal = idiv(obj.Tile.Z * tileHeight, 2);
 
     // Game z model (gamemd Shape_Draw_Z, CellClass::DrawOverlay): tiles write the ground ramp
@@ -277,7 +281,7 @@ export class ShpRenderer {
     }
 
     for (let y = 0; y < img.Height; y++) {
-      if (offset.Y + y < 0) {
+      if (oy + y < 0) {
         w += stride;
         rIdx += img.Width;
         zIdx += ds.Width;
@@ -363,8 +367,8 @@ export class ShpRenderer {
     const zBuffer = ds.getZBuffer();
     const data = ds.data;
 
-    let w = offset.X * 3 + stride * offset.Y;
-    let zIdx = offset.X + offset.Y * ds.Width;
+    let w = (offset.X - ds.OriginX) * 3 + stride * (offset.Y - ds.OriginY);
+    let zIdx = offset.X - ds.OriginX + (offset.Y - ds.OriginY) * ds.Width;
     let rIdx = 0;
 
     // Shadows lie on the caster's ground plane, a per-class lift in front of it: gamemd draws
@@ -382,7 +386,7 @@ export class ShpRenderer {
     const zBase = idiv((t.Rx + t.Ry) * tileHeight, 2);
 
     for (let y = 0; y < img.Height; y++) {
-      if (offset.Y + y < 0) {
+      if (offset.Y - ds.OriginY + y < 0) {
         w += stride;
         rIdx += img.Width;
         zIdx += ds.Width;
@@ -393,8 +397,10 @@ export class ShpRenderer {
       const zBufVal = toShort(zBase + (offset.Y + y + rampLift) - cellBottomY + shadowLift);
 
       for (let x = 0; x < img.Width; x++) {
+        const lx = offset.X - ds.OriginX + x;
+        const ly = offset.Y - ds.OriginY + y;
         if (
-          0 <= offset.X + x && offset.X + x < ds.Width && 0 <= y + offset.Y && y + offset.Y < ds.Height &&
+          0 <= lx && lx < ds.Width && 0 <= ly && ly < ds.Height &&
           imgData[rIdx] !== 0 &&
           zBufVal > zBuffer[zIdx]
         ) {
@@ -427,8 +433,8 @@ export class ShpRenderer {
     const stride = ds.Stride;
     const zBuffer = ds.getZBuffer();
     const data = ds.data;
-    let w = offset.X * 3 + stride * offset.Y;
-    let zIdx = offset.X + offset.Y * ds.Width;
+    let w = (offset.X - ds.OriginX) * 3 + stride * (offset.Y - ds.OriginY);
+    let zIdx = offset.X - ds.OriginX + (offset.Y - ds.OriginY) * ds.Width;
     let rIdx = 0;
     const tileHeight = this.config.TileHeight;
     const cellBottomY = idiv((tile.Dy - tile.Z) * tileHeight, 2) + tileHeight - 1;
@@ -442,8 +448,10 @@ export class ShpRenderer {
     for (let y = 0; y < img.Height; y++) {
       const zBufVal = toShort(zBase + (offset.Y + y) - cellBottomY + lift);
       for (let x = 0; x < img.Width; x++) {
+        const lx = offset.X - ds.OriginX + x;
+        const ly = offset.Y - ds.OriginY + y;
         if (
-          0 <= offset.X + x && offset.X + x < ds.Width && 0 <= offset.Y + y && offset.Y + y < ds.Height &&
+          0 <= lx && lx < ds.Width && 0 <= ly && ly < ds.Height &&
           imgData[rIdx] !== 0 && zBufVal > zBuffer[zIdx]
         ) {
           data[w] = Math.trunc(data[w] / 2);
@@ -482,8 +490,8 @@ export class ShpRenderer {
     const data = ds.data;
     const wHigh = stride * ds.Height;
 
-    const dx = offset.X + idiv(this.config.TileWidth, 2) - idiv(shp.Width, 2) + img.X;
-    const dy = offset.Y - idiv(shp.Height, 2) + img.Y;
+    const dx = offset.X + idiv(this.config.TileWidth, 2) - idiv(shp.Width, 2) + img.X - ds.OriginX;
+    const dy = offset.Y - idiv(shp.Height, 2) + img.Y - ds.OriginY;
     let w = dx * 3 + stride * dy;
     let rIdx = 0;
 

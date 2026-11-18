@@ -20,6 +20,9 @@ export class RenderSettings {
   SizeMode: SizeMode = SizeMode.Auto;
   /** Downscale the saved PNG to this width; 0 keeps the full render size. */
   PreviewWidth = 0;
+  /** Draw the map in strips of this many pixels instead of one canvas; 0 = auto (strip when the
+   * full canvas gets too big) and -1 = never strip. */
+  BandHeight = 0;
   Engine: EngineType = EngineType.AutoDetect;
   StartPositionMarking: StartPositionMarking = StartPositionMarking.None;
   MarkStartPos = false;
@@ -142,6 +145,10 @@ export class RenderSettings {
     registerFlag(['--force-fullmap', '-F'], 'Ignore LocalSize definition and just save the full map', () => (this.SizeMode = SizeMode.Full));
     registerFlag(['--force-localsize', '-f'], 'Use localsize for map dimensions; without this or -F the size is picked automatically', () => (this.SizeMode = SizeMode.Local));
     registerValue(['--preview-width'], 'Downscale the saved PNG to this pixel width (0 = full render size)', (v) => (this.PreviewWidth = Math.max(0, parseInt(v, 10) || 0)));
+    registerValue(['--band-height'], 'Draw the map in strips of this many pixels and downscale each strip into the preview (0 = strip only when the full canvas exceeds the budget, -1 = never strip)', (v) => {
+      const n = parseInt(v, 10);
+      this.BandHeight = Number.isNaN(n) ? 0 : n;
+    });
     registerFlag(['--debug', '-D'], '', () => (this.Debug = true));
     registerValue(['--debug-zbuffer'], "Write the render's z-buffer (.npy) to the given path for diagnostics", (v) => (this.DebugZBufferFile = v));
     registerValue(['--debug-tiles'], "Write one CSV row per map cell (rx,ry,z,ramp,tile,subtile) for diagnostics that need to know a cell's height or slope", (v) => (this.DebugTilesFile = v));

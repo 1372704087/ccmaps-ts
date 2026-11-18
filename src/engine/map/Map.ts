@@ -12,12 +12,13 @@ import {
   OverlayTibType,
 } from '../../shared/Enums.js';
 import { logger } from '../../shared/Log.js';
+import { PngWriter } from '../../rendering/PngWriter.js';
 import { ModConfig } from '../../shared/ModConfig.js';
 import { VirtualFileSystem } from '../../formats/vfs/VirtualFileSystem.js';
 import { IniFile, IniSection } from '../../formats/IniFile.js';
 import { MapFile } from '../../formats/map/MapFile.js';
 import { Palette } from '../../rendering/Palette.js';
-import { DrawingSurface } from '../../rendering/DrawingSurface.js';
+import { DrawingSurface, SurfaceFormat } from '../../rendering/DrawingSurface.js';
 import { Theater } from '../game/Theater.js';
 import { RenderProgress } from '../RenderProgress.js';
 import { Operations } from './Operations.js';
@@ -1099,8 +1100,32 @@ export class MapRenderer {
       }
       if (isRowFilled) break;
     }
-    logger.debug(`Cutoff-height determined at ${y}, cutting off ${this.FullSize.Height - y} rows`);
+    logger.debug(`Cutoff-height determined at ${y}, cutting off ${this.FullSize.Height - y} rows (full height ${this.FullSize.Height})`);
     return y;
+  }
+
+  /** Walks the draw passes on a 1x1 surface so the touched-tile state the cutoff row reads is
+   * complete before a banded render decides which rows the preview covers. */
+  MeasureTileTouchState(): void {
+    const previous = this._drawingSurface;
+    this._drawingSurface = new DrawingSurface(1, 1, SurfaceFormat.Bgr24);
+    this._drawingSurface.MeasureOnly = true;
+    this._bandOriginY = 0;
+    this._bandHeight = Number.MAX_SAFE_INTEGER;
+    for (let y = 0; y < this.FullSize.Height; y++) {
+      for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
+      for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
+    }
+    for (let y = this.FullSize.Height - 1; y >= 0; y--) {
+      for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
+      for (let x = 0; x <= this.FullSize.Width * 2 - 2; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
+    }
+    this._drawingSurface = previous;
+  }
+
+  /** Drops the strip surface so the next strip does not keep two canvases alive at once. */
+  ReleaseDrawingSurface(): void {
+    this._drawingSurface = new DrawingSurface(1, 1, SurfaceFormat.Bgr24);
   }
 
   GetSizePixels(sizeMode: SizeMode): Rectangle {
@@ -1207,26 +1232,26 @@ export class MapRenderer {
     for (let y = 0; y < this.FullSize.Height; y++) {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a)))
+        if (tile != null && this.InBand(tile, 240) && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a)))
           this._theater.Draw(tile, this._drawingSurface);
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a)))
+        if (tile != null && this.InBand(tile, 240) && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a)))
           this._theater.Draw(tile, this._drawingSurface);
       }
     }
     for (let y = 0; y < this.FullSize.Height; y++) {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a))) {
+        if (tile != null && this.InBand(tile, 240) && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a))) {
           const objs = this.GetObjectsAt(x, y);
           for (const o of objs) this._theater.Draw(o, this._drawingSurface);
         }
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a))) {
+        if (tile != null && this.InBand(tile, 240) && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a))) {
           const objs = this.GetObjectsAt(x, y);
           for (const o of objs) this._theater.Draw(o, this._drawingSurface);
         }
@@ -1234,9 +1259,17 @@ export class MapRenderer {
     }
   }
 
-  Draw(): void {
-    this._drawingSurface = new DrawingSurface(this.FullSize.Width * this._config.TileWidth, this.FullSize.Height * this._config.TileHeight);
+  Draw(band?: { originY: number; height: number }): void {
+    const fullWidth = this.FullSize.Width * this._config.TileWidth;
+    const fullHeight = this.FullSize.Height * this._config.TileHeight;
+    const originY = band != null ? Math.max(0, Math.min(band.originY, fullHeight)) : 0;
+    const bandHeight = band != null ? Math.max(1, Math.min(band.height, fullHeight - originY)) : fullHeight;
+    // A band surface holds one horizontal strip of the map: at 500x500 cells the full canvas is
+    // 29760x14805 (2.2 GB of pixels + z), which no longer fits a normal render budget
+    this._drawingSurface = new DrawingSurface(fullWidth, bandHeight, SurfaceFormat.Bgr24, 0, originY);
     this._drawingSurface.TrackVoxelMask = this.TrackVoxelMask;
+    this._bandOriginY = originY;
+    this._bandHeight = bandHeight;
 
     let lastReported = 0.0;
     for (let y = 0; y < this.FullSize.Height; y++) {
@@ -1253,6 +1286,12 @@ export class MapRenderer {
       }
     }
     logger.info('Tiles drawn');
+    // [DEBUG] 瓦片 pass 后立即落盘（环境变量 CNC_MIDPOINT_DUMP 指定输出路径）
+    if (process.env.CNC_MIDPOINT_DUMP) {
+      const rect = new Rectangle(0, 0, this._drawingSurface.Width, this._drawingSurface.Height);
+      PngWriter.save(process.env.CNC_MIDPOINT_DUMP, this._drawingSurface.data, this._drawingSurface.Width, 3, rect, 1);
+      logger.info('Midpoint surface dumped to ' + process.env.CNC_MIDPOINT_DUMP);
+    }
 
     // the game's overlay pass (TacticalClass 0x6d6d10) and its terrain pass walk the map from the
     // bottom row up and left to right; with the strict z-test the earlier drawing keeps a tie, so
@@ -1271,8 +1310,14 @@ export class MapRenderer {
     // and ore stay bright on darkened ground; that is why the pass runs after the overlays here
     const tileTypes = this._theater.GetTileCollection();
     for (let y = 0; y < this.FullSize.Height; y++) {
-      for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) tileTypes.DrawTileShadow(this._tiles.GetTile(x, y), this._drawingSurface);
-      for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) tileTypes.DrawTileShadow(this._tiles.GetTile(x, y), this._drawingSurface);
+      for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
+        const t = this._tiles.GetTile(x, y);
+        if (t != null && this.InBand(t, 180)) tileTypes.DrawTileShadow(t, this._drawingSurface);
+      }
+      for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
+        const t = this._tiles.GetTile(x, y);
+        if (t != null && this.InBand(t, 180)) tileTypes.DrawTileShadow(t, this._drawingSurface);
+      }
     }
 
     // gamemd draws every TerrainClass before the techno layer (TREE -> BLDG -> ANIM): a tree's
@@ -1281,11 +1326,13 @@ export class MapRenderer {
     for (let y = this.FullSize.Height - 1; y >= 0; y--) {
       for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null) for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
+        if (tile != null && this.InBand(tile, 240))
+          for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
       }
       for (let x = 0; x <= this.FullSize.Width * 2 - 2; x += 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null) for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
+        if (tile != null && this.InBand(tile, 240))
+          for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
       }
     }
     logger.info('Terrain objects drawn');
@@ -1294,10 +1341,14 @@ export class MapRenderer {
     for (let y = 0; y < this.FullSize.Height; y++) {
       logger.trace(`Drawing objects row ${y}`);
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
+        const tile = this._tiles.GetTile(x, y);
+        if (tile != null && !this.InBand(tile, 420)) continue;
         for (const o of this.GetObjectsAt(x, y, false))
           if (!(o instanceof TerrainObject) && !(o instanceof SmudgeObject)) this._theater.Draw(o, this._drawingSurface);
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
+        const tile = this._tiles.GetTile(x, y);
+        if (tile != null && !this.InBand(tile, 420)) continue;
         for (const o of this.GetObjectsAt(x, y, false))
           if (!(o instanceof TerrainObject) && !(o instanceof SmudgeObject)) this._theater.Draw(o, this._drawingSurface);
       }
@@ -1326,14 +1377,27 @@ export class MapRenderer {
   // the game's tile walk (TacticalClass 0x6d7560, top row down) blits each cell's smudge right after
   // its tile without a z-test, so the tiles of later cells paint over it and, for a multi-cell
   // smudge, the copy from the last cell of the foundation ends on top
+  // the band a pass is drawing into, in map render rows; anchorY is where a tile's diamond sits
+  private _bandOriginY = 0;
+  private _bandHeight = 0;
+
+  /** Can a sprite anchored on this tile still paint inside the current band? A sprite draws
+   * upward from its anchor, so a tile below the band can still reach into it. */
+  private InBand(t: MapTile, margin: number): boolean {
+    const anchorY = Math.trunc(((t.Dy - t.Z) * this._config.TileHeight) / 2);
+    return anchorY + margin >= this._bandOriginY && anchorY - margin <= this._bandOriginY + this._bandHeight;
+  }
+
   private DrawTilePass(tile: MapTile | null): void {
     if (tile == null) return;
+    if (!this.InBand(tile, 40)) return;
     this._theater.Draw(tile, this._drawingSurface);
     for (const o of tile.AllObjects) if (o instanceof SmudgeObject) this._theater.Draw(o, this._drawingSurface);
   }
 
   private DrawCellPass(tile: MapTile | null): void {
     if (tile == null) return;
+    if (!this.InBand(tile, 240)) return;
     for (const o of tile.AllObjects) if (o instanceof OverlayObject) this._theater.Draw(o, this._drawingSurface);
   }
 

@@ -20,6 +20,13 @@ export class DrawingSurface {
   readonly BytesPerPixel: number;
   readonly Stride: number;
 
+  /// <summary>Top-left corner of this surface in the map's own render coordinates. Banded
+  /// rendering draws one horizontal strip at a time so a 4.4e8-pixel map never needs its full
+  /// canvas in memory; every blitter subtracts this from the coordinates it derives from the
+  /// map, so the drawing code keeps working in render space and only the write index moves.</summary>
+  readonly OriginX: number;
+  readonly OriginY: number;
+
   readonly data: Uint8Array; // BGR triplets
   readonly zBuffer: Int16Array;
   /** Allocated only for maps that actually draw voxel shadows. */
@@ -29,6 +36,11 @@ export class DrawingSurface {
   /// default: the buffer costs a byte per pixel and only A/B diagnostics read it.</summary>
   TrackVoxelMask = false;
   private _voxelMask: Uint8Array | null = null;
+
+  /// <summary>When set, blitters only record the tiles their art touches (the map's cutoff row is
+  /// derived from that) and skip their pixels. A 1x1 surface plus this flag measures the map's
+  /// real bounds without allocating a canvas.</summary>
+  MeasureOnly = false;
 
   // Attached animations are drawn once every object has been drawn. gamemd orders a scene
   // terrain -> buildings -> anims and puts anims last whatever their position, so an anim's
@@ -59,9 +71,17 @@ export class DrawingSurface {
     this._deferredAlpha.length = 0;
   }
 
-  constructor(width: number, height: number, format: SurfaceFormat = SurfaceFormat.Bgr24) {
+  constructor(
+    width: number,
+    height: number,
+    format: SurfaceFormat = SurfaceFormat.Bgr24,
+    originX = 0,
+    originY = 0,
+  ) {
     logger.debug(`Initializing DrawingSurface with dimensions (${width},${height}), format ${format}`);
     this.Format = format;
+    this.OriginX = originX;
+    this.OriginY = originY;
     this.Width = width;
     this.Height = height;
     this.BytesPerPixel = format === SurfaceFormat.Bgr24 ? 3 : 4;

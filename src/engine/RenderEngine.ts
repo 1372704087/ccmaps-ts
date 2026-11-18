@@ -25,7 +25,7 @@ import { RenderProgress } from './RenderProgress.js';
 import { Palette } from '../rendering/Palette.js';
 import { resizeRegionBox } from '../rendering/ImageUtil.js';
 import { Rand } from '../shared/Util.js';
-import type { DrawingSurface } from '../rendering/DrawingSurface.js';
+import { DrawingSurface, SurfaceFormat } from '../rendering/DrawingSurface.js';
 
 export class RenderEngine {
   /// <summary>
@@ -138,6 +138,30 @@ export class RenderEngine {
     }
 
     // 5. Draw the map.
+    // A 500x500 map renders to 29760x14805 pixels: 3 B colour + 2 B depth per pixel, ~2.2 GB in
+    // one canvas. When that does not fit the band budget we draw the map in horizontal strips and
+    // downscale each strip into the preview straight away, so the canvas stays at strip size.
+    const fullRect = renderer.GetFullMapSizePixels();
+    const fullPixels = Math.max(1, fullRect.Width) * Math.max(1, fullRect.Height);
+    let bandHeight = settings.BandHeight;
+    if (bandHeight <= 0 && fullPixels > RenderEngine.DefaultBandThreshold && settings.PreviewWidth > 0) {
+      const budgetPixels = 32_000_000; // ~160 MB of pixels + depth per strip
+      bandHeight = Math.min(4096, Math.max(512, Math.trunc(budgetPixels / Math.max(1, fullRect.Width))));
+    }
+    const banded = bandHeight > 0 && bandHeight < Math.max(1, fullRect.Height) && settings.PreviewWidth > 0;
+
+    if (banded) {
+      const outPath = RenderEngine.resolveOutputPath(settings, mapName);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      const mapStats = settings.MetadataOutFile !== '' ? renderer.ComputeStats() : null;
+      const previewRect = RenderEngine.renderBandedPreview(renderer, settings, outPath, bandHeight);
+      if (settings.MetadataOutFile !== '') {
+        RenderEngine.writeMetadataJson(settings.MetadataOutFile, resolvedName, mapFile, renderer, previewRect, mapStats, engine);
+      }
+      renderer.FreeUseless();
+      return EngineResult.RenderedOk;
+    }
+
     renderer.Draw();
 
     if (settings.DebugZBufferFile !== '')
@@ -159,6 +183,7 @@ export class RenderEngine {
     // 6. Resolve the output path and save the PNG.
     const outPath = RenderEngine.resolveOutputPath(settings, mapName);
     const saveRect = renderer.GetSizePixels(settings.SizeMode);
+    logger.debug(`size rect ${saveRect.Left},${saveRect.Top},${saveRect.Width}x${saveRect.Height}`);
     saveRect.Intersect(new Rectangle(0, 0, renderer.GetDrawingSurface().Width, renderer.GetDrawingSurface().Height));
     // stats need the rules, which FreeUseless disposes below
     const mapStats = settings.MetadataOutFile !== '' ? renderer.ComputeStats() : null;
@@ -188,6 +213,77 @@ export class RenderEngine {
 
     renderer.FreeUseless();
     return EngineResult.RenderedOk;
+  }
+
+  /// <summary>Above this many pixels (full canvas) a preview is drawn strip by strip.</summary>
+  static DefaultBandThreshold = 120_000_000;
+
+  /// <summary>Draws the map in horizontal strips and downscales each strip straight into the
+  /// preview image, so the peak canvas is one strip instead of the whole map.</summary>
+  static renderBandedPreview(renderer: MapRenderer, settings: RenderSettings, outPath: string, bandHeight: number): Rectangle {
+    // The preview is "the size-mode rect scaled to the requested width", exactly as the single
+    // canvas path saves it. That rect is only final once every tile has been drawn (the local view
+    // is trimmed by the cutoff row), so the strips are laid out against the full map and pasted
+    // onto the size-mode rect's grid as they are drawn.
+    const fullRect = renderer.GetFullMapSizePixels();
+    const fullWidth = Math.max(1, fullRect.Width);
+    const fullHeight = Math.max(1, fullRect.Height);
+    // the cutoff row that trims the local view comes out of the tile pass, so a strip render has
+    // to walk the tiles once on a throwaway surface before it can lay out the preview
+    renderer.MeasureTileTouchState();
+    const sizeRect = renderer.GetSizePixels(settings.SizeMode);
+    const targetWidth = settings.PreviewWidth;
+    const scale = targetWidth / Math.max(1, sizeRect.Width);
+    const canvasHeight = Math.max(1, Math.round(sizeRect.Height * scale));
+    const canvas = new DrawingSurface(targetWidth, canvasHeight, SurfaceFormat.Bgr24);
+    const originX = sizeRect.Left;
+    const originY = sizeRect.Top;
+    logger.info(
+      `Rendering ${fullWidth}x${fullHeight} map in strips of ${bandHeight}px -> ${targetWidth}x${canvasHeight} preview`,
+    );
+
+    // rows of the map that actually land on the preview; the size rect may reach past the canvas
+    const bandFrom = Math.max(0, originY);
+    const bandTo = Math.min(fullHeight, originY + sizeRect.Height);
+    for (let top = bandFrom; top < bandTo; top += bandHeight) {
+      const h = Math.min(bandHeight, bandTo - top);
+      renderer.Draw({ originY: top, height: h });
+      if (settings.MarkIceGrowth) renderer.MarkIceGrowth();
+      if (settings.TunnelPaths) renderer.PlotTunnels(settings.TunnelPosition);
+      if (settings.MarkStartPos) renderer.DrawStartPositions();
+
+      const surface = renderer.GetDrawingSurface();
+      const ratio = sizeRect.Height / canvasHeight;
+      const dstTop = Math.round((top - originY) / ratio);
+      const dstBottom = Math.round((top + h - originY) / ratio);
+      const dstHeight = Math.max(1, dstBottom - dstTop);
+      // the strip's share of the preview row range, expressed back in map rows, so each strip is
+      // sampled exactly where the single-canvas box filter would have sampled it
+      const localTop = Math.max(0, Math.round(dstTop * ratio) - (top - originY));
+      const localHeight = Math.max(1, Math.min(h - localTop, Math.round(dstHeight * ratio)));
+      const scaled = resizeRegionBox(
+        surface,
+        new Rectangle(originX, localTop, sizeRect.Width, localHeight),
+        targetWidth,
+        dstHeight,
+      );
+      // paste the strip onto the preview, clipping against its edges
+      const x0 = 0;
+      const x1 = Math.min(scaled.Width, canvas.Width);
+      const y0 = Math.max(0, -dstTop);
+      const y1 = Math.min(scaled.Height, canvas.Height - dstTop);
+      for (let y = y0; y < y1; y++) {
+        const srcStart = (y * scaled.Width + x0) * 3;
+        const dstStart = ((dstTop + y) * canvas.Width + x0) * 3;
+        canvas.data.set(scaled.data.subarray(srcStart, srcStart + (x1 - x0) * 3), dstStart);
+      }
+      logger.info(`Strip ${top}-${top + h} done`);
+      renderer.ReleaseDrawingSurface();
+    }
+
+    canvas.savePNG(outPath, settings.PNGQuality, 0, 0, canvas.Width, canvas.Height);
+    logger.info(`Saved ${outPath} (${canvas.Width}x${canvas.Height})`);
+    return new Rectangle(0, 0, canvas.Width, canvas.Height);
   }
 
   /// <summary>Resolves the output .png file path from settings and map name.</summary>

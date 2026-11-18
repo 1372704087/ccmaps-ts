@@ -125,11 +125,15 @@ export class VoxelDrawable extends Drawable {
 
     for (let y = 0; y < vxl_ds.Height; y++) {
       const srcRowBase = vxl_ds.Stride * y;
-      const bodyRowBase = (d.Y + y - flight) * ds.Stride + d.X * 3;
-      const shadRowBase = (d.Y + y) * ds.Stride + d.X * 3;
-      let zIdx = (d.Y + y - flight) * ds.Width + d.X;
-      const bodyRowValid = bodyRowBase >= 0 && bodyRowBase < wHigh;
-      const shadRowValid = shadRowBase >= 0 && shadRowBase < wHigh;
+      // banded surfaces hold one strip of the map: z stays in map coordinates, the write cursor
+      // moves into the surface's own space
+      const oy = d.Y - ds.OriginY;
+      const ox = d.X - ds.OriginX;
+      const bodyRowBase = (oy + y - flight) * ds.Stride + ox * 3;
+      const shadRowBase = (oy + y) * ds.Stride + ox * 3;
+      let zIdx = (oy + y - flight) * ds.Width + ox;
+      const bodyRowValid = oy + y - flight >= 0 && oy + y - flight < ds.Height;
+      const shadRowValid = oy + y >= 0 && oy + y < ds.Height;
       if (!bodyRowValid && !shadRowValid) continue;
 
       const zBufVal = zBase + Math.trunc((anchorY - (d.Y + y - flight)) / 3);
@@ -159,7 +163,7 @@ export class VoxelDrawable extends Drawable {
         // plane is in front of the buffer; the body pixels drawn by this same
         // blit keep covering their own shadow
         if ((!bodyPx || flight !== 0) && shadRowValid && shadowBufVxl[x + y * vxl_ds.Width]) {
-          const shadIdx = (d.Y + y) * ds.Width + d.X + x;
+          const shadIdx = (oy + y) * ds.Width + ox + x;
           if (zShadowVal > zBuffer[shadIdx]) {
             const swIdx = shadRowBase + x * 3;
             ds.data[swIdx] = Math.trunc(ds.data[swIdx] / 2);

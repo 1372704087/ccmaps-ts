@@ -27,6 +27,9 @@ export function fillRect(
   b: number,
   a: number,
 ): void {
+  // callers pass map render coordinates; a banded surface starts at its own origin
+  x -= ds.OriginX;
+  y -= ds.OriginY;
   const x0 = Math.max(0, Math.trunc(x));
   const y0 = Math.max(0, Math.trunc(y));
   const x1 = Math.min(ds.Width, Math.trunc(x + w));
@@ -47,6 +50,8 @@ export function fillEllipse(
   b: number,
   a: number,
 ): void {
+  cx -= ds.OriginX;
+  cy -= ds.OriginY;
   const x0 = Math.max(0, Math.trunc(cx - rx));
   const y0 = Math.max(0, Math.trunc(cy - ry));
   const x1 = Math.min(ds.Width, Math.ceil(cx + rx));
@@ -85,6 +90,8 @@ export function fillPolygon(
   a: number,
 ): void {
   if (pts.length < 3) return;
+  if (ds.OriginX !== 0 || ds.OriginY !== 0)
+    pts = pts.map((p) => ({ X: p.X - ds.OriginX, Y: p.Y - ds.OriginY }) as Point);
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -135,6 +142,10 @@ export function drawLine(
   a: number,
 ): void {
   const radius = width / 2;
+  x0 -= ds.OriginX;
+  y0 -= ds.OriginY;
+  x1 -= ds.OriginX;
+  y1 -= ds.OriginY;
   const minX = Math.max(0, Math.trunc(Math.min(x0, x1) - radius));
   const minY = Math.max(0, Math.trunc(Math.min(y0, y1) - radius));
   const maxX = Math.min(ds.Width, Math.ceil(Math.max(x0, x1) + radius));
@@ -161,6 +172,10 @@ export function drawDashedLine(
   dashValues: number[],
 ): void {
   const radius = width / 2;
+  x0 -= ds.OriginX;
+  y0 -= ds.OriginY;
+  x1 -= ds.OriginX;
+  y1 -= ds.OriginY;
   const dx = x1 - x0;
   const dy = y1 - y0;
   const len = Math.sqrt(dx * dx + dy * dy);
@@ -203,8 +218,8 @@ export interface RgbaImage {
 }
 
 export function drawImage(ds: DrawingSurface, img: RgbaImage, x: number, y: number, opacity = 1.0): void {
-  const x0 = Math.trunc(x);
-  const y0 = Math.trunc(y);
+  const x0 = Math.trunc(x) - ds.OriginX;
+  const y0 = Math.trunc(y) - ds.OriginY;
   for (let iy = 0; iy < img.Height; iy++) {
     const sy = y0 + iy;
     if (sy < 0 || sy >= ds.Height) continue;

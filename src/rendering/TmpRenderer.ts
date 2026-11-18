@@ -71,10 +71,14 @@ export class TmpRenderer {
 
     // writing bounds
     const wHigh = stride * ds.Height;
-    let w = stride * offset.Y + (offset.X + halfCx - 2) * 3;
+    // banded surfaces hold a strip of the map: the tile keeps its map coordinates, the cursor
+    // moves into surface space
+    const oy = offset.Y - ds.OriginY;
+    const ox = offset.X - ds.OriginX;
+    let w = stride * oy + (ox + halfCx - 2) * 3;
 
     let rIdx = 0, x = 0, y = 0;
-    let zIdx = offset.Y * ds.Width + offset.X + halfCx - 2;
+    let zIdx = oy * ds.Width + ox + halfCx - 2;
     let cx = 0; // Amount of pixel to copy
 
     // like the game (Blit_Iso_Tile): a tile without a z-data section draws without
@@ -130,14 +134,15 @@ export class TmpRenderer {
 
     offset.X += img.ExtraX - img.X;
     offset.Y += img.ExtraY - img.Y;
-    w = stride * offset.Y + 3 * offset.X;
-    zIdx = offset.X + offset.Y * ds.Width;
+    w = stride * (offset.Y - ds.OriginY) + 3 * (offset.X - ds.OriginX);
+    zIdx = offset.X - ds.OriginX + (offset.Y - ds.OriginY) * ds.Width;
     rIdx = 0;
 
     // identify extra-data affected tiles for cutoff
     const extraScreenBounds = Rectangle.FromLTRB(
-      Math.max(0, offset.X), Math.max(0, offset.Y),
-      Math.min(offset.X + img.ExtraWidth, ds.Width), Math.min(offset.Y + img.ExtraHeight, ds.Height),
+      Math.max(ds.OriginX, offset.X), Math.max(ds.OriginY, offset.Y),
+      Math.min(offset.X + img.ExtraWidth, ds.OriginX + ds.Width),
+      Math.min(offset.Y + img.ExtraHeight, ds.OriginY + ds.Height),
     );
 
     for (let by = extraScreenBounds.Top; by < extraScreenBounds.Bottom; by += Math.trunc(tmp.BlockHeight / 2)) {
@@ -154,6 +159,8 @@ export class TmpRenderer {
     }
 
     // Extra graphics are just a square
+    // a measuring pass only needs the touched-tile state, which both parts above and below record
+    if (ds.MeasureOnly) return;
     for (y = 0; y < img.ExtraHeight; y++) {
       for (x = 0; x < img.ExtraWidth; x++) {
         // Checking per line is required because v needs to be checked every time
