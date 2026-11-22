@@ -37,6 +37,7 @@
       <button type="button" data-mode="server" data-i18n="modeServer">服务器</button>
     </div>
     <div class="mode-hint" id="modeHint" data-i18n="modeHintBrowser">地图与游戏资源只在本机浏览器读取，不上传服务器</div>
+    <div class="drop-hint" data-i18n="dropHint">可直接把地图文件拖到此面板</div>
 
     <label class="field-label" id="srcLabel" data-i18n="srcLabel">选择地图（上传本机地图文件）</label>
     <div class="row">
@@ -48,6 +49,10 @@
     <div class="maplist" id="maplist">
       <div class="maplist-empty" data-i18n="maplistEmpty">请上传 .map / .yrm / .mpr 地图文件（支持多选）</div>
     </div>
+    <details class="map-info" id="mapInfo" hidden>
+      <summary class="mi-head"><span data-i18n="mapInfoTitle">地图信息</span><span class="mi-summary" id="mapInfoSummary"></span></summary>
+      <div class="mi-body" id="mapInfoBody"></div>
+    </details>
 
     <div id="gameResSection">
       <label class="field-label" id="resLabel" data-i18n="resLabel">游戏资源（选择本机游戏目录，不上传）</label>
@@ -107,6 +112,8 @@
       <button id="renderBtn" class="btn btn-primary" disabled>
         <span class="play">▶</span> <span data-i18n="renderBtn">开始渲染</span>
       </button>
+      <button id="renderAllBtn" class="btn btn-ghost" disabled><span data-i18n="renderAllBtn">全部渲染</span></button>
+      <button id="zipBtn" class="btn btn-ghost" disabled><span data-i18n="downloadZip">⬇ 下载 ZIP</span></button>
       <div class="render-state" id="renderState" data-i18n="renderStateIdle">尚未渲染</div>
     </div>
 
@@ -134,6 +141,10 @@
       <span class="preview-tip" data-i18n="previewTip">点击预览图可放大查看</span>
     </div>
     <div class="preview-meta" id="previewMeta"></div>
+    <div class="render-history" id="renderHistory" hidden>
+      <div class="rh-title" data-i18n="historyTitle">渲染结果</div>
+      <div class="rh-list" id="renderHistoryList"></div>
+    </div>
   </section>
 </main>
 
@@ -169,6 +180,8 @@
   </div>
 </div>
 
+<script src="zip.js"></script>
+<script src="map-info.js"></script>
 <script src="browser-render.js"></script>
 <script src="app.js"></script>
 </body>

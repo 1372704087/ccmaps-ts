@@ -6,18 +6,21 @@
   const els = {
     renderMode: $('renderMode'), modeHint: $('modeHint'),
     srcLabel: $('srcLabel'), resLabel: $('resLabel'),
-    uploadBtn: $('uploadBtn'), fileInput: $('fileInput'), maplist: $('maplist'),
+    maplist: $('maplist'), mapInfo: $('mapInfo'), mapInfoSummary: $('mapInfoSummary'), mapInfoBody: $('mapInfoBody'),
+    sources: document.querySelector('.panel.sources'),
     gameDirBtn: $('gameDirBtn'), gameDirInput: $('gameDirInput'), assetState: $('assetState'),
     gameResSection: $('gameResSection'),
+    uploadBtn: $('uploadBtn'), fileInput: $('fileInput'),
     format: $('format'), engine: $('engine'), sizeMode: $('sizeMode'),
     pngCompression: $('pngCompression'), pngCompressionVal: $('pngCompressionVal'),
     pngCompressionField: $('pngCompressionField'),
     markStartPos: $('markStartPos'), markOre: $('markOre'),
-    renderBtn: $('renderBtn'), renderState: $('renderState'),
+    renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), renderState: $('renderState'),
     progressWrap: $('progressWrap'), progressFill: $('progressFill'),
     progressPct: $('progressPct'), progressPhase: $('progressPhase'),
     previewFrame: $('previewFrame'), placeholder: $('placeholder'), previewImg: $('previewImg'),
     previewMeta: $('previewMeta'), downloadBtn: $('downloadBtn'),
+    renderHistory: $('renderHistory'), renderHistoryList: $('renderHistoryList'),
     lightbox: $('lightbox'), lightboxImg: $('lightboxImg'), lightboxTitle: $('lightboxTitle'),
     lightboxClose: $('lightboxClose'), lightboxDownload: $('lightboxDownload'),
     lightboxBody: $('lightboxBody'), zoomPct: $('zoomPct'),
@@ -31,6 +34,16 @@
   let assetInfo = null;
   let gameFiles = [];
   let renderBusy = false;
+  let batchBusy = false;
+  let lastRenderResult = null;
+  let zipBlob = null;
+  const renderHistory = [];
+  let historySeq = 0;
+  const MAX_HISTORY = 12;
+  let mapInfoCache = new Map();
+  let currentMapInfo = null;
+  let currentInfoEntry = null;
+  let infoRequestSeq = 0;
   let currentImage = null;
   let renderStart = 0;
   let lastStartArgs = [];
@@ -97,6 +110,21 @@
       'tglStartPos': '标记出生点',
       'tglOre': '高亮矿石',
       'renderBtn': '开始渲染',
+      'renderAllBtn': '全部渲染',
+      'downloadZip': '⬇ 下载 ZIP',
+      'batchRendering': '批量渲染 {i}/{total}：{name}',
+      'batchDone': '批量渲染完成：成功 {ok} 张',
+      'batchDoneFail': '批量渲染完成：成功 {ok} 张，失败 {fail} 张',
+      'batchTooMany': '一次最多批量渲染 {n} 张地图',
+      'zipEmpty': '没有可打包的渲染结果',
+      'mapInfoTitle': '地图信息',
+      'infoName': '名称', 'infoAuthor': '作者', 'infoSize': '尺寸',
+      'infoPlayers': '玩家数', 'infoTheater': '剧场',
+      'infoLoading': '读取地图信息…', 'infoNone': '—',
+      'dropHint': '可直接把地图文件拖到此面板',
+      'readingGameDir': '读取游戏目录…',
+      'gameDirPermission': '没有游戏目录读取权限',
+      'gameDirRestoreFail': '无法恢复上次的游戏目录，请重新选择',
       'renderStateIdle': '尚未渲染',
       'phaseWait': '等待开始',
       'prevTitle': '预览',
@@ -135,6 +163,7 @@
       'reqFailed': '请求失败',
       'reqFailedPrefix': '请求失败：',
       'recentPrefix': '最近: ',
+      'historyTitle': '渲染结果',
     },
     en: {
       'title': 'CNCMaps TS · Map Renderer',
@@ -186,6 +215,21 @@
       'tglStartPos': 'Mark Start Positions',
       'tglOre': 'Highlight Ore',
       'renderBtn': 'Start Render',
+      'renderAllBtn': 'Render All',
+      'downloadZip': '⬇ Download ZIP',
+      'batchRendering': 'Rendering {i}/{total}: {name}',
+      'batchDone': 'Batch complete: {ok} succeeded',
+      'batchDoneFail': 'Batch complete: {ok} succeeded, {fail} failed',
+      'batchTooMany': 'At most {n} maps can be rendered in one batch',
+      'zipEmpty': 'No rendered images to package',
+      'mapInfoTitle': 'Map Info',
+      'infoName': 'Name', 'infoAuthor': 'Author', 'infoSize': 'Size',
+      'infoPlayers': 'Players', 'infoTheater': 'Theater',
+      'infoLoading': 'Reading map info…', 'infoNone': '—',
+      'dropHint': 'Drag map files onto this panel',
+      'readingGameDir': 'Reading game folder…',
+      'gameDirPermission': 'No permission to read the game folder',
+      'gameDirRestoreFail': 'Could not restore the previous game folder; select it again',
       'renderStateIdle': 'Not rendered yet',
       'phaseWait': 'Waiting to start',
       'prevTitle': 'Preview',
@@ -225,6 +269,7 @@
       'reqFailed': 'Request failed',
       'reqFailedPrefix': 'Request failed: ',
       'recentPrefix': 'Recent: ',
+      'historyTitle': 'Rendered Images',
     },
   };
   let LANG = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh';
@@ -257,6 +302,7 @@
       els.infoRender.textContent = t('infoRenderEmpty');
     if (assetInfo)
       els.assetState.textContent = tf('assetLocalReady', assetInfo);
+    if (currentInfoEntry) renderMapInfo(currentInfoEntry, currentMapInfo);
     if (renderStateSupportsT(els.renderState.textContent))
       els.renderState.textContent = t(renderStateSupportsT(els.renderState.textContent));
     applyModeUI();
@@ -297,6 +343,7 @@
     renderMode = mode === 'browser' ? 'browser' : 'server';
     if (persist) localStorage.setItem(MODE_KEY, renderMode);
     applyModeUI();
+    if (renderMode === 'browser' && !gameFiles.length) void restoreGameDir();
   }
 
   function applyModeUI() {
@@ -314,14 +361,22 @@
       : t('assetStateEmptyBrowser');
   }
 
+  function updateRenderButtons() {
+    const idle = !renderBusy && !batchBusy;
+    els.renderBtn.disabled = !idle || !selectedMap;
+    els.renderAllBtn.disabled = !idle || maps.length === 0;
+    els.zipBtn.disabled = !idle || !zipBlob;
+  }
+
   function selectMap(m) {
     selectedMap = m;
     els.maplist.querySelectorAll('.maplist-item').forEach((x) => {
       x.classList.toggle('active', !!m && x.dataset.key === m.key);
     });
-    els.renderBtn.disabled = renderBusy || !m;
+    updateRenderButtons();
     els.renderState.textContent = m ? t('selPrefix') + m.name : t('renderStateIdle');
     setStatus('ok', t('selMap'));
+    void loadMapInfo(m);
   }
 
   function renderMapList() {
@@ -332,6 +387,8 @@
       empty.setAttribute('data-i18n', 'maplistEmpty');
       empty.textContent = t('maplistEmpty');
       els.maplist.appendChild(empty);
+      els.mapInfo.hidden = true;
+      updateRenderButtons();
       return;
     }
     maps.forEach((m) => {
@@ -347,6 +404,66 @@
       els.maplist.appendChild(item);
     });
     if (selectedMap) selectMap(selectedMap);
+    updateRenderButtons();
+  }
+
+  function renderMapInfo(entry, info) {
+    currentInfoEntry = entry;
+    currentMapInfo = info;
+    if (!entry) { els.mapInfo.hidden = true; return; }
+    const rows = info ? [
+      [t('infoName'), info.name || entry.name],
+      [t('infoAuthor'), info.author || t('infoNone')],
+      [t('infoSize'), info.width && info.height ? info.width + ' × ' + info.height : t('infoNone')],
+      [t('infoPlayers'), info.players != null ? String(info.players) : t('infoNone')],
+      [t('infoTheater'), info.theater || t('infoNone')],
+    ] : [
+      [t('infoName'), entry.name],
+      [t('infoSize'), fmtSize(entry.size)],
+    ];
+    const summary = info
+      ? [
+        info.name || entry.name,
+        info.width && info.height ? info.width + '×' + info.height : '',
+        info.players != null ? info.players + 'P' : '',
+        info.theater || '',
+      ].filter(Boolean).join(' · ')
+      : entry.name;
+    els.mapInfoSummary.textContent = summary;
+    els.mapInfoBody.innerHTML = '';
+    for (const [key, value] of rows) {
+      const row = document.createElement('div');
+      row.className = 'mi-row';
+      const k = document.createElement('span');
+      k.className = 'mi-key';
+      k.textContent = key;
+      const v = document.createElement('span');
+      v.className = 'mi-val';
+      v.textContent = value;
+      row.appendChild(k);
+      row.appendChild(v);
+      els.mapInfoBody.appendChild(row);
+    }
+    els.mapInfo.hidden = false;
+  }
+
+  async function loadMapInfo(entry) {
+    if (!entry) { renderMapInfo(null, null); return; }
+    if (!entry.file || !window.CncmapsMapInfo) { renderMapInfo(entry, null); return; }
+    const cacheKey = entry.key + ':' + (entry.file.lastModified || 0);
+    if (mapInfoCache.has(cacheKey)) { renderMapInfo(entry, mapInfoCache.get(cacheKey)); return; }
+    const seq = ++infoRequestSeq;
+    els.mapInfo.hidden = false;
+    els.mapInfoSummary.textContent = t('infoLoading');
+    els.mapInfoBody.innerHTML = '';
+    try {
+      const info = await window.CncmapsMapInfo.read(entry.file);
+      if (seq !== infoRequestSeq) return;
+      mapInfoCache.set(cacheKey, info);
+      renderMapInfo(entry, info);
+    } catch (e) {
+      if (seq === infoRequestSeq) renderMapInfo(entry, null);
+    }
   }
 
   async function uploadMaps(fileList) {
@@ -439,6 +556,71 @@
     };
     els.previewImg.src = url.startsWith('blob:') ? url : url + '?t=' + Date.now();
     if (meta) els.previewMeta.textContent = meta;
+  }
+
+  function addRenderHistory(url, downloadUrl, name) {
+    if (!url) return;
+    const existing = renderHistory.find((h) => h.url === url);
+    if (existing) {
+      existing.name = name || existing.name;
+      renderHistoryList();
+      return;
+    }
+    renderHistory.unshift({ id: ++historySeq, url, downloadUrl: downloadUrl || url, name: name || '' });
+    while (renderHistory.length > MAX_HISTORY) {
+      const removed = renderHistory.pop();
+      if (removed && removed.url.startsWith('blob:') && (!currentImage || currentImage.url !== removed.url)) {
+        URL.revokeObjectURL(removed.url);
+      }
+    }
+    renderHistoryList();
+  }
+
+  function removeHistoryItem(id) {
+    const idx = renderHistory.findIndex((h) => h.id === id);
+    if (idx === -1) return;
+    const [item] = renderHistory.splice(idx, 1);
+    if (item.url.startsWith('blob:') && (!currentImage || currentImage.url !== item.url)) {
+      URL.revokeObjectURL(item.url);
+    }
+    renderHistoryList();
+  }
+
+  function selectHistoryItem(item) {
+    currentImage = { url: item.url, name: item.name, downloadUrl: item.downloadUrl };
+    showPreview(item.url, item.name);
+    els.downloadBtn.disabled = false;
+    els.downloadBtn.dataset.url = item.downloadUrl;
+    els.downloadBtn.dataset.name = item.name;
+    els.previewMeta.textContent = item.name;
+    renderHistoryList();
+  }
+
+  function renderHistoryList() {
+    els.renderHistoryList.innerHTML = '';
+    if (!renderHistory.length) {
+      els.renderHistory.hidden = true;
+      return;
+    }
+    els.renderHistory.hidden = false;
+    for (const item of renderHistory) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rh-item' + (currentImage && currentImage.url === item.url ? ' active' : '');
+      btn.title = item.name;
+      const img = document.createElement('img');
+      img.src = item.url;
+      img.alt = item.name;
+      img.loading = 'lazy';
+      img.onerror = () => removeHistoryItem(item.id);
+      const name = document.createElement('span');
+      name.className = 'rh-name';
+      name.textContent = item.name;
+      btn.appendChild(img);
+      btn.appendChild(name);
+      btn.onclick = () => selectHistoryItem(item);
+      els.renderHistoryList.appendChild(btn);
+    }
   }
 
   function openLightbox(url, name) {
@@ -549,6 +731,7 @@
 
   async function renderBrowser() {
     if (renderBusy) return;
+    lastRenderResult = { ok: false };
     if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
     if (!selectedMap.file) { setStatus('err', t('browserNoMapFile')); return; }
     if (!gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
@@ -560,6 +743,7 @@
 
     renderBusy = true;
     els.renderBtn.disabled = true;
+    updateRenderButtons();
     renderStart = Date.now();
     setProgress(0, t('phaseSubmit'));
     els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
@@ -594,10 +778,10 @@
       });
 
       setProgress(100, t('complete'));
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
       blobUrl = URL.createObjectURL(res.blob);
       currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
       showPreview(blobUrl, res.name);
+      addRenderHistory(blobUrl, blobUrl, res.name);
       els.downloadBtn.disabled = false;
       els.downloadBtn.dataset.url = blobUrl;
       els.downloadBtn.dataset.name = res.name;
@@ -608,7 +792,9 @@
       els.infoRender.textContent = t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
       els.renderState.textContent = t('renderDone');
       setStatus('ok', t('complete'));
+      lastRenderResult = { ok: true, blob: res.blob, name: res.name };
     } catch (e) {
+      lastRenderResult = { ok: false, error: e };
       const code = e && e.code;
       if (code === 'UNSUPPORTED') {
         fallback = true;
@@ -639,17 +825,19 @@
       }
     } finally {
       renderBusy = false;
-      els.renderBtn.disabled = !selectedMap;
+      updateRenderButtons();
     }
     if (fallback) return renderServer();
   }
 
   async function renderServer() {
     if (renderBusy) return;
+    lastRenderResult = { ok: false };
     if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
 
     renderBusy = true;
     els.renderBtn.disabled = true;
+    updateRenderButtons();
     renderStart = Date.now();
     setProgress(0, t('phaseSubmit'));
     els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
@@ -704,6 +892,7 @@
               setProgress(100, t('complete'));
               currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
               showPreview(evt.url, evt.name);
+              addRenderHistory(evt.url, evt.downloadUrl, evt.name);
               els.downloadBtn.disabled = false;
               els.downloadBtn.dataset.url = evt.downloadUrl;
               els.downloadBtn.dataset.name = evt.name;
@@ -713,6 +902,7 @@
                 argvShort(lastStartArgs) + ' · ' + dur;
               els.renderState.textContent = t('renderDone');
               setStatus('ok', t('complete'));
+              lastRenderResult = { ok: true, downloadUrl: evt.downloadUrl, name: evt.name };
             } else {
               setProgress(lastProgress, t('failCode') + evt.code + ')');
               els.renderState.textContent = t('renderFailed');
@@ -729,8 +919,70 @@
       setStatus('err', t('reqFailedPrefix') + (e && e.message || e));
     } finally {
       renderBusy = false;
-      els.renderBtn.disabled = selectedMap ? false : true;
+      updateRenderButtons();
     }
+  }
+
+  const MAX_BATCH = 12;
+
+  async function renderAll() {
+    if (renderBusy || batchBusy) return;
+    if (!maps.length) return;
+    if (maps.length > MAX_BATCH) { setStatus('err', tf('batchTooMany', { n: MAX_BATCH })); return; }
+    if (renderMode === 'browser' && !gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
+    batchBusy = true;
+    zipBlob = null;
+    updateRenderButtons();
+    const entries = maps.slice();
+    const zipped = [];
+    let failed = 0;
+    try {
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        selectedMap = entry;
+        renderMapList();
+        setStatus('work', tf('batchRendering', { i: i + 1, total: entries.length, name: entry.name }));
+        lastRenderResult = null;
+        if (renderMode === 'browser') await renderBrowser();
+        else await renderServer();
+        const result = lastRenderResult;
+        if (result && result.ok) {
+          let blob = result.blob;
+          if (!blob && result.downloadUrl) {
+            try {
+              const resp = await fetch(result.downloadUrl);
+              if (resp.ok) blob = await resp.blob();
+            } catch (e) { /* count as failure below */ }
+          }
+          if (blob) zipped.push({ name: result.name || entry.name, blob });
+          else failed++;
+        } else {
+          failed++;
+        }
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      if (zipped.length) zipBlob = await window.createZipBlob(zipped);
+      setStatus(zipped.length ? 'ok' : 'err', failed
+        ? tf('batchDoneFail', { ok: zipped.length, fail: failed })
+        : tf('batchDone', { ok: zipped.length }));
+    } catch (e) {
+      setStatus('err', t('browserRenderFailed') + ': ' + (e && e.message || e));
+    } finally {
+      batchBusy = false;
+      updateRenderButtons();
+    }
+  }
+
+  function downloadZip() {
+    if (!zipBlob) { setStatus('err', t('zipEmpty')); return; }
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'cncmaps-' + new Date().toISOString().slice(0, 10) + '.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   function argvShort(args) {
@@ -751,12 +1003,110 @@
     return keys[p] ? t(keys[p]) : p;
   }
 
+  const GAME_DB = 'cncmaps_web';
+  const GAME_STORE = 'handles';
+  const GAME_HANDLE_KEY = 'gameDir';
+  let savedDirHandle = null;
+
+  function openGameDb() {
+    return new Promise((resolve, reject) => {
+      if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB unavailable')); return; }
+      const req = indexedDB.open(GAME_DB, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(GAME_STORE)) req.result.createObjectStore(GAME_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function getSavedGameDir() {
+    try {
+      const db = await openGameDb();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(GAME_STORE, 'readonly');
+        const rq = tx.objectStore(GAME_STORE).get(GAME_HANDLE_KEY);
+        rq.onsuccess = () => resolve(rq.result || null);
+        rq.onerror = () => reject(rq.error);
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function saveGameDir(handle) {
+    try {
+      const db = await openGameDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(GAME_STORE, 'readwrite');
+        tx.objectStore(GAME_STORE).put(handle, GAME_HANDLE_KEY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) { /* remembering the folder is best-effort */ }
+  }
+
+  async function collectGameFiles(handle) {
+    const files = [];
+    async function walk(dir) {
+      for await (const entry of dir.values()) {
+        if (entry.kind === 'file') {
+          if (ASSET_RE.test(entry.name)) {
+            try { files.push(await entry.getFile()); } catch (e) { /* skip unreadable */ }
+          }
+        } else if (entry.kind === 'directory') {
+          await walk(entry);
+        }
+      }
+    }
+    await walk(handle);
+    return files;
+  }
+
+  async function chooseGameDir() {
+    if (!window.showDirectoryPicker) { els.gameDirInput.click(); return; }
+    try {
+      let handle = savedDirHandle;
+      if (handle) {
+        const perm = await handle.requestPermission({ mode: 'read' });
+        if (perm !== 'granted') handle = null;
+      }
+      if (!handle) {
+        handle = await window.showDirectoryPicker({ mode: 'read' });
+        const perm = await handle.requestPermission({ mode: 'read' });
+        if (perm !== 'granted') { setStatus('err', t('gameDirPermission')); return; }
+      }
+      savedDirHandle = handle;
+      void saveGameDir(handle);
+      setStatus('work', t('readingGameDir'));
+      const files = await collectGameFiles(handle);
+      if (!files.length) setStatus('err', t('assetNoFiles'));
+      else setLocalAssets(files);
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      setStatus('err', t('gameDirRestoreFail') + ': ' + (e && e.message || e));
+    }
+  }
+
+  async function restoreGameDir() {
+    if (renderMode !== 'browser' || !window.showDirectoryPicker) return;
+    const handle = await getSavedGameDir();
+    if (!handle) return;
+    savedDirHandle = handle;
+    try {
+      const perm = await handle.queryPermission({ mode: 'read' });
+      if (perm !== 'granted') return;
+      const files = await collectGameFiles(handle);
+      if (files.length) setLocalAssets(files);
+    } catch (e) { /* ignore a stale handle */ }
+  }
+
   // events
   els.renderMode.querySelectorAll('button').forEach((b) => {
     b.onclick = () => { setRenderMode(b.dataset.mode); };
   });
   els.uploadBtn.onclick = () => els.fileInput.click();
-  els.gameDirBtn.onclick = () => els.gameDirInput.click();
+  els.gameDirBtn.onclick = () => { void chooseGameDir(); };
   els.gameDirInput.addEventListener('change', () => {
     if (els.gameDirInput.files && els.gameDirInput.files.length) {
       const files = Array.from(els.gameDirInput.files).filter((f) => ASSET_RE.test(f.name));
@@ -772,6 +1122,32 @@
     }
     els.fileInput.value = '';
   });
+  els.sources.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    els.sources.classList.add('drag-over');
+  });
+  els.sources.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    els.sources.classList.add('drag-over');
+  });
+  els.sources.addEventListener('dragleave', (e) => {
+    if (!els.sources.contains(e.relatedTarget)) els.sources.classList.remove('drag-over');
+  });
+  els.sources.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    els.sources.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+    const mapFiles = files.filter((f) => /\.(map|yrm|mpr)$/i.test(f.name));
+    if (!mapFiles.length) { setStatus('err', t('extErr')); return; }
+    if (renderMode === 'server') uploadMaps(mapFiles);
+    else addLocalMaps(mapFiles);
+  });
+  window.addEventListener('dragover', (e) => { if (!els.sources.contains(e.target)) e.preventDefault(); });
+  window.addEventListener('drop', (e) => { if (!els.sources.contains(e.target)) e.preventDefault(); });
   els.downloadBtn.onclick = () => {
     if (currentImage) {
       const a = document.createElement('a');
@@ -806,6 +1182,8 @@
     };
   });
   els.renderBtn.onclick = render;
+  els.renderAllBtn.onclick = () => { void renderAll(); };
+  els.zipBtn.onclick = downloadZip;
   els.pngCompression.addEventListener('input', () => {
     els.pngCompressionVal.textContent = els.pngCompression.value;
   });
@@ -816,4 +1194,6 @@
 
   setStatus('ok', t('statusReady'));
   applyLang();
+  updateRenderButtons();
+  void restoreGameDir();
 })();

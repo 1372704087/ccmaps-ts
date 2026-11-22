@@ -75,6 +75,14 @@ npm run web
 
 `npm run web` 会先构建浏览器渲染器（`scripts/build-worker.mjs` → `src/web/static/webworker/cncmaps-worker.js`），再启动服务。需要现代浏览器支持 `OffscreenCanvas` 与 `FileReaderSync`；超大地图可能超出浏览器内存，此时请切换到服务器模式。
 
+页面支持：
+
+- 多选或直接拖拽地图文件到左侧面板；
+- 选中地图后显示名称、作者、尺寸、玩家数和剧场；
+- 浏览器模式下用 File System Access API 记住上次的游戏目录，下次自动恢复（需浏览器授权）；
+- 「全部渲染」按顺序渲染列表中的地图（单次最多 12 张），完成后可下载 ZIP；
+- 预览面板下方保留最近 12 张渲染结果缩略图，点击可切换查看和下载。
+
 服务端模式下，服务端通过环境变量 `CNCMAPS_GAME_DIR` 指定游戏目录（渲染所需的 `.mix` 文件来源）：
 
 ```powershell
