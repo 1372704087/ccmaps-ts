@@ -3,7 +3,7 @@
   'use strict';
 
   // Keep in sync with package.json.
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.2.0';
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -20,6 +20,7 @@
     jpegQualityField: $('jpegQualityField'), pngCompressionField: $('pngCompressionField'),
     presetSelect: $('presetSelect'), presetSaveBtn: $('presetSaveBtn'), presetDeleteBtn: $('presetDeleteBtn'),
     serverHealth: $('serverHealth'), appVersion: $('appVersion'),
+    themeBtn: $('themeBtn'), toastStack: $('toastStack'),
     markStartPos: $('markStartPos'), markOre: $('markOre'),
     renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), cancelBtn: $('cancelBtn'), renderState: $('renderState'),
     progressWrap: $('progressWrap'), progressFill: $('progressFill'),
@@ -74,6 +75,7 @@
     zh: {
       'title': 'CNCMaps TS · 地图渲染器',
       'langBtn': '🌐 English',
+      'themeToggle': '切换明暗主题',
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · 地图渲染器',
       'srcTitle': '地图来源',
       'modeLabel': '渲染位置',
@@ -198,6 +200,7 @@
       'historyCleared': '渲染历史已清空',
       'historyReuse': '复用参数',
       'historyReuseTitle': '套用该次渲染参数并重新渲染',
+      'removeHistory': '删除',
       'historyNoMap': '已套用参数，但地图列表中找不到对应地图',
       'historyNoParams': '该历史记录没有保存的渲染参数',
       'logTitle': '渲染日志',
@@ -212,6 +215,7 @@
     en: {
       'title': 'CNCMaps TS · Map Renderer',
       'langBtn': '🌐 中文',
+      'themeToggle': 'Toggle light/dark theme',
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · Map Renderer',
       'srcTitle': 'Map Source',
       'modeLabel': 'Render Location',
@@ -337,6 +341,7 @@
       'historyCleared': 'Render history cleared',
       'historyReuse': 'Reuse settings',
       'historyReuseTitle': 'Apply these settings and render again',
+      'removeHistory': 'Delete',
       'historyNoMap': 'Settings applied, but no matching map is in the list',
       'historyNoParams': 'This history entry has no saved settings',
       'logTitle': 'Render log',
@@ -374,6 +379,8 @@
         + t('creditHint') + ' | CNCMaps TS · by 1372704087';
     }
     els.langBtn.textContent = t('langBtn');
+    els.themeBtn.title = t('themeToggle');
+    els.themeBtn.setAttribute('aria-label', t('themeToggle'));
     els.appVersion.title = t('versionTitle') + ' ' + APP_VERSION;
     setEngineTag();
     if (els.infoRender.textContent === I18N.zh['infoRenderEmpty'])
@@ -400,11 +407,43 @@
     applyLang();
   }
   els.langBtn.onclick = () => setLang(LANG === 'zh' ? 'en' : 'zh');
-  //
+
+  const THEME_KEY = 'cncmaps_theme';
+  function applyTheme() {
+    const saved = localStorage.getItem(THEME_KEY);
+    const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    const theme = saved === 'light' || saved === 'dark' ? saved : (prefersLight ? 'light' : 'dark');
+    document.documentElement.dataset.cncmapsTheme = theme;
+    els.themeBtn.textContent = theme === 'light' ? '🌙' : '☀️';
+  }
+  function toggleTheme() {
+    const next = document.documentElement.dataset.cncmapsTheme === 'light' ? 'dark' : 'light';
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme();
+  }
+  els.themeBtn.onclick = toggleTheme;
 
   function setStatus(state, text) {
     els.statusDot.className = 'dot' + (state ? ' ' + state : '');
     els.statusText.textContent = text;
+  }
+
+  function toast(message, type, ms) {
+    if (!message || !els.toastStack) return;
+    const el = document.createElement('div');
+    el.className = 'toast ' + (type || 'ok');
+    el.textContent = message;
+    els.toastStack.appendChild(el);
+    while (els.toastStack.children.length > 4) els.toastStack.firstElementChild.remove();
+    const life = ms || (type === 'error' ? 4500 : 2800);
+    setTimeout(() => {
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 260);
+    }, life);
+  }
+
+  function renderToast(message, type) {
+    if (!batchBusy || type === 'error' || type === 'warn') toast(message, type);
   }
   function setEngineTag() {
     const v = els.engine.value;
@@ -553,6 +592,7 @@
     storePresets(presets);
     populatePresets(existing >= 0 ? existing : presets.length - 1);
     setStatus('ok', t('presetSaved'));
+    toast(t('presetSaved'), 'ok');
   }
 
   function deletePreset() {
@@ -563,6 +603,7 @@
     storePresets(presets);
     populatePresets();
     setStatus('ok', t('presetDeleted'));
+    toast(t('presetDeleted'), 'ok');
   }
 
   async function refreshServerHealth() {
@@ -658,6 +699,7 @@
     renderMapList();
     els.infoMaps.textContent = t('mapsPrefix') + maps.length;
     setStatus('ok', t('mapRemoved'));
+    toast(t('mapRemoved'), 'ok');
   }
 
   function clearMaps() {
@@ -667,6 +709,7 @@
     renderMapList();
     els.infoMaps.textContent = t('mapsPrefix') + 0;
     setStatus('ok', t('mapsCleared'));
+    toast(t('mapsCleared'), 'ok');
   }
 
   function renderMapInfo(entry, info) {
@@ -728,45 +771,60 @@
     }
   }
 
+  function setUploadBusy(busy) {
+    els.uploadBtn.disabled = busy;
+    els.uploadBtn.classList.toggle('is-busy', busy);
+  }
+
   async function uploadMaps(fileList) {
     const files = Array.from(fileList || []);
     if (!files.length) return;
     const valid = files.filter((f) => /\.(map|yrm|mpr)$/i.test(f.name));
     const bad = files.length - valid.length;
     if (!valid.length) {
-      setStatus('err', t('extErr')); return;
+      setStatus('err', t('extErr'));
+      toast(t('extErr'), 'error');
+      return;
     }
     let ok = 0;
     let lastErr = null;
-    for (let i = 0; i < valid.length; i++) {
-      const file = valid[i];
-      setStatus('work', t('uploading') + ' ' + (i + 1) + '/' + valid.length);
-      try {
-        const resp = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'X-Filename': encodeURIComponent(file.name) },
-          body: file,
-        });
-        const data = await resp.json();
-        if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
-        const entry = { key: 'up:' + data.token, name: data.name, size: data.size, uploadToken: data.token, file };
-        maps.push(entry);
-        ok++;
-        if (!selectedMap) selectedMap = entry;
-      } catch (e) {
-        lastErr = e;
+    setUploadBusy(true);
+    try {
+      for (let i = 0; i < valid.length; i++) {
+        const file = valid[i];
+        setStatus('work', t('uploading') + ' ' + (i + 1) + '/' + valid.length);
+        try {
+          const resp = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'X-Filename': encodeURIComponent(file.name) },
+            body: file,
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
+          const entry = { key: 'up:' + data.token, name: data.name, size: data.size, uploadToken: data.token, file };
+          maps.push(entry);
+          ok++;
+          if (!selectedMap) selectedMap = entry;
+        } catch (e) {
+          lastErr = e;
+        }
       }
+    } finally {
+      setUploadBusy(false);
     }
     renderMapList();
     els.infoMaps.textContent = t('mapsPrefix') + maps.length;
     if (ok === 0) {
-      setStatus('err', t('uploadFail') + (lastErr ? ': ' + (lastErr.message || lastErr) : ''));
+      const msg = t('uploadFail') + (lastErr ? ': ' + (lastErr.message || lastErr) : '');
+      setStatus('err', msg);
+      toast(msg, 'error');
       return;
     }
     const msg = bad > 0
       ? tf('uploadBatchPartial', { ok, total: valid.length, bad })
       : tf('uploadBatchDone', { ok, total: valid.length });
     setStatus('ok', msg);
+    toast(msg, 'ok');
   }
 
   function addLocalMaps(fileList) {
@@ -790,7 +848,9 @@
     }
     renderMapList();
     els.infoMaps.textContent = t('mapsPrefix') + maps.length;
-    setStatus('ok', tf('localMapsAdded', { n: added || valid.length }));
+    const msg = tf('localMapsAdded', { n: added || valid.length });
+    setStatus('ok', msg);
+    toast(msg, 'ok');
   }
 
   function setLocalAssets(files) {
@@ -872,7 +932,7 @@
       renderHistoryList();
       return;
     }
-    const item = { id: ++historySeq, dbId: null, url, downloadUrl: downloadUrl || url, name: name || '', values: values || null };
+    const item = { id: ++historySeq, dbId: null, url, downloadUrl: downloadUrl || url, name: name || '', values: values || null, at: Date.now() };
     renderHistory.unshift(item);
     while (renderHistory.length > MAX_HISTORY) {
       const removed = renderHistory.pop();
@@ -929,6 +989,20 @@
     renderHistoryList();
   }
 
+  function historyMeta(item) {
+    const parts = [];
+    if (item.at) {
+      const d = new Date(item.at);
+      parts.push(String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+    }
+    if (item.values) {
+      parts.push(item.values.format === 'jpg' ? 'JPG' : 'PNG');
+      const eng = { ra2: 'RA2', yr: 'YR', ts: 'TS', fs: 'FS' }[item.values.engine];
+      parts.push(eng || 'AUTO');
+    }
+    return parts.join(' · ');
+  }
+
   function renderHistoryList() {
     els.renderHistoryList.innerHTML = '';
     if (!renderHistory.length) {
@@ -937,13 +1011,14 @@
     }
     els.renderHistory.hidden = false;
     for (const item of renderHistory) {
+      const meta = historyMeta(item);
       const wrap = document.createElement('div');
       wrap.className = 'rh-item' + (currentImage && currentImage.url === item.url ? ' active' : '');
-      wrap.title = item.name;
+      wrap.title = item.name + (meta ? ' · ' + meta : '');
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'rh-pick';
-      btn.title = item.name;
+      btn.title = wrap.title;
       const img = document.createElement('img');
       img.src = item.url;
       img.alt = item.name;
@@ -952,8 +1027,12 @@
       const name = document.createElement('span');
       name.className = 'rh-name';
       name.textContent = item.name;
+      const metaEl = document.createElement('span');
+      metaEl.className = 'rh-meta';
+      metaEl.textContent = meta;
       btn.appendChild(img);
       btn.appendChild(name);
+      btn.appendChild(metaEl);
       btn.onclick = () => selectHistoryItem(item);
       const actions = document.createElement('div');
       actions.className = 'rh-actions';
@@ -964,7 +1043,15 @@
       reuse.title = t('historyReuseTitle');
       reuse.disabled = !item.values;
       reuse.onclick = (e) => { e.stopPropagation(); reuseHistoryParams(item); };
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'rh-del';
+      del.textContent = '×';
+      del.title = t('removeHistory');
+      del.setAttribute('aria-label', t('removeHistory'));
+      del.onclick = (e) => { e.stopPropagation(); removeHistoryItem(item.id); };
       actions.appendChild(reuse);
+      actions.appendChild(del);
       wrap.appendChild(btn);
       wrap.appendChild(actions);
       els.renderHistoryList.appendChild(wrap);
@@ -972,12 +1059,20 @@
   }
 
   function reuseHistoryParams(item) {
-    if (!item.values) { setStatus('err', t('historyNoParams')); return; }
+    if (!item.values) {
+      setStatus('err', t('historyNoParams'));
+      toast(t('historyNoParams'), 'error');
+      return;
+    }
     if (renderBusy || batchBusy) return;
     applyPresetValues(item.values);
     const base = item.name.replace(/\.(png|jpe?g)$/i, '').toLowerCase();
     const match = maps.find((m) => m.name.replace(/\.(map|yrm|mpr)$/i, '').toLowerCase() === base);
-    if (!match) { setStatus('err', t('historyNoMap')); return; }
+    if (!match) {
+      setStatus('err', t('historyNoMap'));
+      toast(t('historyNoMap'), 'error');
+      return;
+    }
     selectedMap = match;
     renderMapList();
     render();
@@ -994,6 +1089,7 @@
     renderHistory.length = 0;
     renderHistoryList();
     setStatus('ok', t('historyCleared'));
+    toast(t('historyCleared'), 'ok');
     try {
       const db = await openGameDb();
       await new Promise((resolve) => {
@@ -1005,7 +1101,9 @@
     } catch (e) { /* history is best-effort */ }
   }
 
+  let lastFocus = null;
   function openLightbox(url, name) {
+    if (els.lightbox.hidden) lastFocus = document.activeElement;
     els.lightboxImg.src = url;
     els.lightboxTitle.textContent = name || t('lightboxTitle');
     els.lightboxDownload.href = url.includes('/image/')
@@ -1016,8 +1114,25 @@
     applyZoom(false);
     els.lightboxBody.scrollLeft = 0;
     els.lightboxBody.scrollTop = 0;
+    try { els.lightboxClose.focus(); } catch (e) { /* ignore */ }
   }
-  function closeLightbox() { els.lightbox.hidden = true; }
+  function closeLightbox() {
+    if (els.lightbox.hidden) return;
+    els.lightbox.hidden = true;
+    if (lastFocus && document.contains(lastFocus) && typeof lastFocus.focus === 'function') {
+      try { lastFocus.focus(); } catch (e) { /* ignore */ }
+    }
+    lastFocus = null;
+  }
+
+  function navigateHistory(delta) {
+    if (!renderHistory.length) return;
+    let idx = renderHistory.findIndex((h) => currentImage && h.url === currentImage.url);
+    if (idx === -1) idx = 0;
+    const next = renderHistory[(idx + delta + renderHistory.length) % renderHistory.length];
+    selectHistoryItem(next);
+    if (!els.lightbox.hidden) openLightbox(next.url, next.name);
+  }
 
   // ---- lightbox zoom / pan ----
   let zoom = 1;
@@ -1132,6 +1247,7 @@
     setProgress(0, t('phaseSubmit'));
     els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
     els.progressWrap.classList.add('show');
+    els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
     let fallback = false;
@@ -1184,6 +1300,7 @@
       els.infoRender.textContent = t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
       els.renderState.textContent = t('renderDone');
       setStatus('ok', t('complete'));
+      renderToast(t('renderDone') + ' · ' + res.name, 'ok');
       lastRenderResult = { ok: true, blob: res.blob, name: res.name };
     } catch (e) {
       lastRenderResult = { ok: false, error: e };
@@ -1192,6 +1309,7 @@
         lastRenderResult = { ok: false, cancelled: true };
         els.renderState.textContent = t('cancelled');
         setStatus('ok', t('cancelled'));
+        renderToast(t('cancelled'), 'warn');
       } else if (code === 'UNSUPPORTED') {
         fallback = true;
         setRenderMode('server');
@@ -1214,6 +1332,7 @@
         else setStatus('err', t('browserRenderFailed') + ': ' + (e && e.message || e));
         appendLog(e && e.message ? e.message : String(e), 'error');
         openLog();
+        renderToast(els.statusText.textContent, 'error');
         els.renderState.textContent = t('renderFailed');
         if (!code) {
           if (br) { try { br.terminate(); } catch (err) { /* ignore */ } }
@@ -1224,6 +1343,7 @@
     } finally {
       renderBusy = false;
       cancelRequested = false;
+      els.previewFrame.classList.remove('busy');
       updateRenderButtons();
     }
     if (fallback) return renderServer();
@@ -1245,6 +1365,7 @@
     setProgress(0, t('phaseSubmit'));
     els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
     els.progressWrap.classList.add('show');
+    els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
     try {
@@ -1313,6 +1434,7 @@
             if (evt.cancelled) {
               els.renderState.textContent = t('cancelled');
               setStatus('ok', t('cancelled'));
+              renderToast(t('cancelled'), 'warn');
               lastRenderResult = { ok: false, cancelled: true };
             } else if (evt.ok) {
               setProgress(100, t('complete'));
@@ -1328,17 +1450,20 @@
                 argvShort(lastStartArgs) + ' · ' + dur;
               els.renderState.textContent = t('renderDone');
               setStatus('ok', t('complete'));
+              renderToast(t('renderDone') + ' · ' + evt.name, 'ok');
               lastRenderResult = { ok: true, downloadUrl: evt.downloadUrl, name: evt.name };
             } else {
               setProgress(lastProgress, t('failCode') + evt.code + ')');
               appendLog((evt.message || t('renderFailed')) + (evt.code != null ? ' (code ' + evt.code + ')' : ''), 'error');
               openLog();
+              renderToast((evt.message || t('renderFailed')) + (evt.code != null ? ' (code ' + evt.code + ')' : ''), 'error');
               els.renderState.textContent = t('renderFailed');
               setStatus('err', t('renderFailed'));
             }
           } else if (evt.type === 'error') {
             appendLog(evt.message || t('reqFailed'), 'error');
             openLog();
+            renderToast(evt.message || t('reqFailed'), 'error');
             els.renderState.textContent = t('errorPrefix') + (evt.message || '');
             setStatus('err', t('reqFailed'));
           }
@@ -1348,10 +1473,12 @@
       if (cancelRequested || (e && e.name === 'AbortError')) {
         els.renderState.textContent = t('cancelled');
         setStatus('ok', t('cancelled'));
+        renderToast(t('cancelled'), 'warn');
         lastRenderResult = { ok: false, cancelled: true };
       } else {
         appendLog(e && e.message ? e.message : String(e), 'error');
         openLog();
+        renderToast(e && e.message ? e.message : String(e), 'error');
         els.renderState.textContent = t('reqFailed');
         setStatus('err', t('reqFailedPrefix') + (e && e.message || e));
       }
@@ -1360,6 +1487,7 @@
       cancelRequested = false;
       currentJobId = null;
       abortController = null;
+      els.previewFrame.classList.remove('busy');
       updateRenderButtons();
     }
   }
@@ -1406,12 +1534,20 @@
         if (batchCancelled) break;
       }
       if (zipped.length) zipBlob = await window.createZipBlob(zipped);
-      if (batchCancelled) setStatus('ok', t('batchCancelled'));
-      else setStatus(zipped.length ? 'ok' : 'err', failed
-        ? tf('batchDoneFail', { ok: zipped.length, fail: failed })
-        : tf('batchDone', { ok: zipped.length }));
+      if (batchCancelled) {
+        setStatus('ok', t('batchCancelled'));
+        toast(t('batchCancelled'), 'warn');
+      } else {
+        const msg = failed
+          ? tf('batchDoneFail', { ok: zipped.length, fail: failed })
+          : tf('batchDone', { ok: zipped.length });
+        setStatus(zipped.length ? 'ok' : 'err', msg);
+        toast(msg, zipped.length ? 'ok' : 'error');
+      }
     } catch (e) {
-      setStatus('err', t('browserRenderFailed') + ': ' + (e && e.message || e));
+      const msg = t('browserRenderFailed') + ': ' + (e && e.message || e);
+      setStatus('err', msg);
+      toast(msg, 'error');
     } finally {
       batchBusy = false;
       updateRenderButtons();
@@ -1535,6 +1671,7 @@
           downloadUrl: url,
           name: record.name || '',
           values: record.values || null,
+          at: record.createdAt || Date.now(),
         });
       }
       renderHistoryList();
@@ -1702,6 +1839,19 @@
       } else { zoom = 1; applyZoom(false); }
     };
   });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !els.lightbox.hidden) { closeLightbox(); return; }
+    if (!els.lightbox.hidden && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault();
+      navigateHistory(e.key === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !renderBusy && !batchBusy && selectedMap) {
+      e.preventDefault();
+      render();
+    }
+  });
+
   els.renderBtn.onclick = render;
   els.renderAllBtn.onclick = () => { void renderAll(); };
   els.zipBtn.onclick = downloadZip;
@@ -1728,6 +1878,7 @@
   els.appVersion.textContent = 'v' + APP_VERSION;
   setStatus('ok', t('statusReady'));
   applyLang();
+  applyTheme();
   applyFormatFields();
   populatePresets();
   updateRenderButtons();
