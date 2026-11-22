@@ -12,6 +12,9 @@ web-output/
 *.log
 req_body.json
 
+# Generated browser worker bundle
+src/web/static/webworker/
+
 # OS / editor
 .DS_Store
 Thumbs.db

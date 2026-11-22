@@ -71,9 +71,11 @@ node dist/cli.js \
 npm run web
 ```
 
-默认监听 `http://localhost:5173`。在浏览器打开后，点击「上传地图文件」选择一个地图，勾选渲染选项并「开始渲染」，即可预览、放大和下载。
+默认监听 `http://localhost:5173`。页面默认使用**浏览器本地渲染**：选择本机地图文件和游戏安装目录后，渲染在 Web Worker 中完成，地图和游戏资源不会上传到服务器。也可以切换到「服务器」模式，由服务端渲染。
 
-服务端通过环境变量 `CNCMAPS_GAME_DIR` 指定游戏目录（渲染所需的 `.mix` 文件来源）：
+`npm run web` 会先构建浏览器渲染器（`scripts/build-worker.mjs` → `src/web/static/webworker/cncmaps-worker.js`），再启动服务。需要现代浏览器支持 `OffscreenCanvas` 与 `FileReaderSync`；超大地图可能超出浏览器内存，此时请切换到服务器模式。
+
+服务端模式下，服务端通过环境变量 `CNCMAPS_GAME_DIR` 指定游戏目录（渲染所需的 `.mix` 文件来源）：
 
 ```powershell
 $env:CNCMAPS_GAME_DIR = 'C:\path\to\game'
@@ -88,6 +90,8 @@ npm run web
 ```
 
 渲染时这些目录都会作为 `.mix` 数据来源参与查找，引擎由地图或界面选项自动决定使用哪套。
+
+如果服务部署在远程服务器，服务端需要有游戏资源才能使用「服务器」渲染模式；前端不会上传游戏目录。浏览器模式则直接读取本机游戏目录，无需服务器安装游戏。
 
 其他可选环境变量：
 

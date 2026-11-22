@@ -28,6 +28,9 @@ import { Rand } from '../shared/Util.js';
 import { DrawingSurface, SurfaceFormat } from '../rendering/DrawingSurface.js';
 
 export class RenderEngine {
+  /** Engine chosen by the last render (explicit or auto-detected). */
+  LastEngine: EngineType | null = null;
+
   /// <summary>
   /// Renders the map referred to by <paramref name="settings"/>. Returns an
   /// EngineResult describing the outcome.
@@ -52,6 +55,7 @@ export class RenderEngine {
       return EngineResult.Exception;
     }
     logger.info(`Using ${EngineType[engine]} engine`);
+    this.LastEngine = engine;
 
     const config = ModConfig.GetDefaultConfig(engine);
 
@@ -114,8 +118,10 @@ export class RenderEngine {
     renderer.StartMarkerSize = settings.MarkerStartSize;
     renderer.PreCaptureColors = settings.PreCaptureColors;
     renderer.TrackVoxelMask = settings.DebugVoxelMaskFile !== '';
-    if (settings.ReportProgress) {
-      renderer.Progress = new RenderProgress((pct, phase) => process.stdout.write(`progress:${Math.trunc(pct)}:${phase}\n`));
+    if (settings.ReportProgress || settings.ProgressSink != null) {
+      const sink = settings.ProgressSink
+        ?? ((pct: number, phase: string) => process.stdout.write(`progress:${Math.trunc(pct)}:${phase}\n`));
+      renderer.Progress = new RenderProgress(sink);
     }
 
     try {
@@ -143,6 +149,13 @@ export class RenderEngine {
     // downscale each strip into the preview straight away, so the canvas stays at strip size.
     const fullRect = renderer.GetFullMapSizePixels();
     const fullPixels = Math.max(1, fullRect.Width) * Math.max(1, fullRect.Height);
+    if (settings.MaxSurfacePixels > 0 && fullPixels > settings.MaxSurfacePixels) {
+      logger.fatal(
+        `Map surface needs ${fullPixels} pixels, above the ${settings.MaxSurfacePixels} limit; use server rendering`,
+      );
+      renderer.FreeUseless();
+      return EngineResult.SurfaceTooLarge;
+    }
     let bandHeight = settings.BandHeight;
     if (bandHeight <= 0 && fullPixels > RenderEngine.DefaultBandThreshold && settings.PreviewWidth > 0) {
       const budgetPixels = 32_000_000; // ~160 MB of pixels + depth per strip
@@ -151,10 +164,16 @@ export class RenderEngine {
     const banded = bandHeight > 0 && bandHeight < Math.max(1, fullRect.Height) && settings.PreviewWidth > 0;
 
     if (banded) {
-      const outPath = RenderEngine.resolveOutputPath(settings, mapName);
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      let outPath = '';
+      if (settings.OutputSink == null) {
+        outPath = RenderEngine.resolveOutputPath(settings, mapName);
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      }
       const mapStats = settings.MetadataOutFile !== '' ? renderer.ComputeStats() : null;
-      const previewRect = RenderEngine.renderBandedPreview(renderer, settings, outPath, bandHeight);
+      const save = settings.OutputSink
+        ? (canvas: DrawingSurface) => settings.OutputSink!(canvas, new Rectangle(0, 0, canvas.Width, canvas.Height))
+        : (canvas: DrawingSurface) => canvas.savePNG(outPath, settings.PNGQuality, 0, 0, canvas.Width, canvas.Height);
+      const previewRect = RenderEngine.renderBandedPreview(renderer, settings, save, bandHeight);
       if (settings.MetadataOutFile !== '') {
         RenderEngine.writeMetadataJson(settings.MetadataOutFile, resolvedName, mapFile, renderer, previewRect, mapStats, engine);
       }
@@ -181,13 +200,16 @@ export class RenderEngine {
     }
 
     // 6. Resolve the output path and save the PNG.
-    const outPath = RenderEngine.resolveOutputPath(settings, mapName);
+    let outPath = '';
+    if (settings.OutputSink == null) {
+      outPath = RenderEngine.resolveOutputPath(settings, mapName);
+    }
     const saveRect = renderer.GetSizePixels(settings.SizeMode);
     logger.debug(`size rect ${saveRect.Left},${saveRect.Top},${saveRect.Width}x${saveRect.Height}`);
     saveRect.Intersect(new Rectangle(0, 0, renderer.GetDrawingSurface().Width, renderer.GetDrawingSurface().Height));
     // stats need the rules, which FreeUseless disposes below
     const mapStats = settings.MetadataOutFile !== '' ? renderer.ComputeStats() : null;
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    if (settings.OutputSink == null) fs.mkdirSync(path.dirname(outPath), { recursive: true });
     const surface = renderer.GetDrawingSurface();
     let outputSurface = surface;
     let outputRect = saveRect;
@@ -198,15 +220,19 @@ export class RenderEngine {
       outputRect = new Rectangle(0, 0, targetWidth, targetHeight);
       logger.info(`Downscaling saved PNG to ${targetWidth}x${targetHeight}`);
     }
-    outputSurface.savePNG(
-      outPath,
-      settings.PNGQuality,
-      outputRect.Left,
-      outputRect.Top,
-      outputRect.Width,
-      outputRect.Height,
-    );
-    logger.info(`Saved ${outPath}`);
+    if (settings.OutputSink != null) {
+      settings.OutputSink(outputSurface, outputRect);
+    } else {
+      outputSurface.savePNG(
+        outPath,
+        settings.PNGQuality,
+        outputRect.Left,
+        outputRect.Top,
+        outputRect.Width,
+        outputRect.Height,
+      );
+      logger.info(`Saved ${outPath}`);
+    }
 
     if (settings.MetadataOutFile !== '')
       RenderEngine.writeMetadataJson(settings.MetadataOutFile, resolvedName, mapFile, renderer, saveRect, mapStats, engine);
@@ -220,7 +246,7 @@ export class RenderEngine {
 
   /// <summary>Draws the map in horizontal strips and downscales each strip straight into the
   /// preview image, so the peak canvas is one strip instead of the whole map.</summary>
-  static renderBandedPreview(renderer: MapRenderer, settings: RenderSettings, outPath: string, bandHeight: number): Rectangle {
+  static renderBandedPreview(renderer: MapRenderer, settings: RenderSettings, save: (canvas: DrawingSurface) => void, bandHeight: number): Rectangle {
     // The preview is "the size-mode rect scaled to the requested width", exactly as the single
     // canvas path saves it. That rect is only final once every tile has been drawn (the local view
     // is trimmed by the cutoff row), so the strips are laid out against the full map and pasted
@@ -281,8 +307,8 @@ export class RenderEngine {
       renderer.ReleaseDrawingSurface();
     }
 
-    canvas.savePNG(outPath, settings.PNGQuality, 0, 0, canvas.Width, canvas.Height);
-    logger.info(`Saved ${outPath} (${canvas.Width}x${canvas.Height})`);
+    save(canvas);
+    logger.info(`Saved preview (${canvas.Width}x${canvas.Height})`);
     return new Rectangle(0, 0, canvas.Width, canvas.Height);
   }
 

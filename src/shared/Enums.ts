@@ -93,6 +93,7 @@ export enum EngineResult {
   Exception,
   LoadTheaterFailed,
   LoadRulesFailed,
+  SurfaceTooLarge,
 }
 
 // From CNCMaps.Shared/Enums.cs in Engine.Types (drawable kinds)

@@ -1,6 +1,6 @@
 // cncmaps-ts local web UI backend.
 // Minimal Node http server (no external deps). Serves the static frontend,
-// lists maps in a game dir, and runs the renderer CLI as a child process,
+// accepts uploaded maps, and runs the renderer CLI as a child process,
 // streaming progress back as a NDJSON/SSE stream and the result image URL.
 import * as http from 'node:http';
 import * as fs from 'node:fs';
@@ -116,23 +116,18 @@ function readRawBody(req, limit = MAX_UPLOAD_BYTES) {
 function buildArgs(p) {
   const args = [CLI_JS];
 
-  // Resolve the input map: an uploaded map (by token) or a server-local path.
-  let infile = p.infile || '';
-  let displayName = p.name || (infile ? path.basename(infile) : '');
-  if (p.uploadToken) {
-    const m = mapTokenGet(p.uploadToken);
-    if (!m) throw new Error('Uploaded map expired or not found');
-    infile = m.file;
-    displayName = m.name;
-  }
-  if (!infile) throw new Error('Missing map file');
+  // Resolve the uploaded map by token.
+  if (!p.uploadToken) throw new Error('Missing map file');
+  const m = mapTokenGet(p.uploadToken);
+  if (!m) throw new Error('Uploaded map expired or not found');
+  const infile = m.file;
+  const displayName = m.name;
 
   args.push('--infile=' + infile);
 
-  // mixdir(s): prefer the server-side game copies (one --mixdir per dir);
-  // otherwise accept a client-supplied dir.
-  const dirs = GAME_DIRS.length > 0 ? GAME_DIRS : [p.mixdir || ''].filter((s) => s);
-  for (const d of dirs) args.push('--mixdir=' + d);
+  // mixdir(s): server-side game copies only. Client game folders are never
+  // uploaded in server mode; browser-local rendering handles those.
+  for (const d of GAME_DIRS) args.push('--mixdir=' + d);
 
   const outdir = SCRATCH_DIR;
   fs.mkdirSync(outdir, { recursive: true });
@@ -180,8 +175,8 @@ function buildArgs(p) {
 }
 
 function streamRender(req, res, params) {
-  if (!params.infile && !params.uploadToken) {
-    return sendJson(res, 400, { error: 'Missing map (infile or uploadToken)' });
+  if (!params.uploadToken) {
+    return sendJson(res, 400, { error: 'Missing map uploadToken' });
   }
   let job;
   try {
@@ -305,6 +300,10 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 500, { error: String(e && e.message || e) });
   }
 });
+
+// Large .mix uploads can take a while on slow links.
+server.requestTimeout = 30 * 60 * 1000;
+server.headersTimeout = 60 * 1000;
 
 fs.mkdirSync(SCRATCH_DIR, { recursive: true });
 server.listen(PORT, '127.0.0.1', () => {

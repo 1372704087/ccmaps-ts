@@ -12,7 +12,10 @@ class LoggerClass {
     ? ((parseInt(process.env.CNCMAPS_LOG_LEVEL, 10) as LogLevel) ?? LogLevel.Info)
     : LogLevel.Info;
 
+  private sink: ((level: LogLevel, message: string) => void) | null = null;
+
   setLevel(l: LogLevel): void { this.level = l; }
+  setSink(sink: ((level: LogLevel, message: string) => void) | null): void { this.sink = sink; }
 
   private fmt(level: string, msg: string): string {
     const ms = (process.hrtime.bigint() / 1000000n).toString();
@@ -21,6 +24,7 @@ class LoggerClass {
   private out(level: LogLevel, tag: string, args: unknown[]): void {
     if (level < this.level) return;
     const msg = args.map((a) => (typeof a === 'string' ? a : fmtObj(a))).join(' ');
+    if (this.sink) this.sink(level, msg);
     if (level >= LogLevel.Error) console.error(this.fmt(tag, msg));
     else console.log(this.fmt(tag, msg));
   }

@@ -10,13 +10,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:worker": "node scripts/build-worker.mjs",
+    "build:all": "npm run build && npm run build:worker",
     "cli": "node dist/cli.js",
     "test": "tsc -p tsconfig.json && node --test \"dist/**/*.test.js\"",
-    "web": "node src/web/server.mjs"
+    "web": "npm run build:worker && node src/web/server.mjs"
   },
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "buffer": "^6.0.3",
+    "esbuild": "^0.28.2",
     "pngjs": "^7.0.0",
     "typescript": "^7.0.2"
   }

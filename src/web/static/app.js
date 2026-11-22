@@ -4,7 +4,11 @@
 
   const $ = (id) => document.getElementById(id);
   const els = {
+    renderMode: $('renderMode'), modeHint: $('modeHint'),
+    srcLabel: $('srcLabel'), resLabel: $('resLabel'),
     uploadBtn: $('uploadBtn'), fileInput: $('fileInput'), maplist: $('maplist'),
+    gameDirBtn: $('gameDirBtn'), gameDirInput: $('gameDirInput'), assetState: $('assetState'),
+    gameResSection: $('gameResSection'),
     format: $('format'), engine: $('engine'), sizeMode: $('sizeMode'),
     pngCompression: $('pngCompression'), pngCompressionVal: $('pngCompressionVal'),
     pngCompressionField: $('pngCompressionField'),
@@ -23,11 +27,22 @@
   };
 
   let selectedMap = null;
-  const uploadedMaps = [];
+  const maps = [];
+  let assetInfo = null;
+  let gameFiles = [];
   let renderBusy = false;
   let currentImage = null;
   let renderStart = 0;
   let lastStartArgs = [];
+  let blobUrl = null;
+  let br = null;
+  let brAssetsSig = '';
+
+  const MODE_KEY = 'cncmaps_render_mode';
+  const BR_CLIENT = window.CncmapsBrowserRender;
+  let renderMode = localStorage.getItem(MODE_KEY) === 'server'
+    ? 'server'
+    : (BR_CLIENT && BR_CLIENT.supported() ? 'browser' : 'server');
 
   // ---- i18n ----
   const LANG_KEY = 'cncmaps_lang';
@@ -37,8 +52,33 @@
       'langBtn': '🌐 English',
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · 地图渲染器',
       'srcTitle': '地图来源',
+      'modeLabel': '渲染位置',
+      'modeBrowser': '浏览器（不上传）',
+      'modeServer': '服务器',
+      'modeHintBrowser': '地图与游戏资源只在本机浏览器读取，不上传服务器',
+      'modeHintServer': '地图会上传到服务器，使用服务器配置的游戏资源渲染',
+      'srcLabelBrowser': '选择本地地图（不上传）',
+      'srcLabelServer': '选择地图（上传本机地图文件）',
+      'uploadBtnBrowser': '📁 选择本地地图（可多选）',
+      'uploadBtnServer': '📁 上传地图文件（可多选）',
+      'resLabelBrowser': '游戏资源（选择本机游戏目录，不上传）',
+      'assetStateEmptyBrowser': '未选择游戏目录，浏览器渲染需要游戏资源',
+      'assetLocalReady': '本地资源 {n} 个 · {size}（不上传）',
+      'workerStarting': '启动浏览器渲染器…',
+      'phaseAssets': '读取游戏资源…',
+      'browserNoMapFile': '该地图没有本地文件，请切换到服务器模式',
+      'browserNoAssets': '请先选择游戏目录（浏览器渲染需要游戏资源）',
+      'browserUnsupported': '当前浏览器不支持本地渲染，已切换到服务器模式',
+      'browserSurfaceTooLarge': '地图过大，浏览器内存不足，请切换到服务器模式',
+      'browserEncodeUnsupported': '浏览器不支持图片编码，请切换到服务器模式',
+      'browserAssetsMissing': '无法加载游戏资源，请确认选择的是完整游戏目录，或切换到服务器模式',
+      'browserRenderFailed': '浏览器渲染失败',
+      'localMapsAdded': '已选择 {n} 个本地地图（不上传）',
       'srcLabel': '选择地图（上传本机地图文件）',
       'uploadBtn': '📁 上传地图文件（可多选）',
+      'resLabel': '游戏资源（可选，远程部署时上传本机游戏目录）',
+      'gameDirBtn': '🎮 选择游戏目录',
+      'assetNoFiles': '所选目录中没有可用的游戏资源文件',
       'curLabel': '当前选择',
       'maplistEmpty': '请上传 .map / .yrm / .mpr 地图文件（支持多选）',
       'paramsTitle': '渲染参数',
@@ -76,9 +116,10 @@
       'extErr': '仅支持 .map / .yrm / .mpr 文件',
       'uploading': '上传中…',
       'uploadFail': '上传失败',
-      'uploadedPrefix': '已上传：',
       'uploadBatchDone': '已上传 {ok}/{total} 个地图',
       'uploadBatchPartial': '已上传 {ok}/{total} 个地图，{bad} 个文件被跳过',
+      'mapsPrefix': '地图：',
+      'browserBadge': '本地',
       'phaseParsing': '解析地图 / 规则…', 'phaseTiles': '绘制地形…',
       'phaseObjects': '绘制建筑与单位…', 'phaseEncoding': '编码输出…',
       'phaseDrawing': '绘制中…',
@@ -100,8 +141,33 @@
       'langBtn': '🌐 中文',
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · Map Renderer',
       'srcTitle': 'Map Source',
+      'modeLabel': 'Render Location',
+      'modeBrowser': 'Browser (no upload)',
+      'modeServer': 'Server',
+      'modeHintBrowser': 'Maps and game files stay in this browser; nothing is uploaded',
+      'modeHintServer': 'Maps are uploaded and rendered with the server game resources',
+      'srcLabelBrowser': 'Choose local maps (no upload)',
+      'srcLabelServer': 'Choose maps (upload from this device)',
+      'uploadBtnBrowser': '📁 Choose Local Maps (multi)',
+      'uploadBtnServer': '📁 Upload Map Files (multi)',
+      'resLabelBrowser': 'Game resources (select a local game folder, no upload)',
+      'assetStateEmptyBrowser': 'No game folder selected; browser rendering needs game resources',
+      'assetLocalReady': 'Local assets: {n} files · {size} (not uploaded)',
+      'workerStarting': 'Starting browser renderer…',
+      'phaseAssets': 'Reading game resources…',
+      'browserNoMapFile': 'This map has no local file; switch to server mode',
+      'browserNoAssets': 'Select a game folder first (browser rendering needs game resources)',
+      'browserUnsupported': 'This browser cannot render locally; switched to server mode',
+      'browserSurfaceTooLarge': 'Map too large for browser memory; switch to server mode',
+      'browserEncodeUnsupported': 'Image encoding is not supported; switch to server mode',
+      'browserAssetsMissing': 'Could not load game resources; select a complete game folder or switch to server mode',
+      'browserRenderFailed': 'Browser render failed',
+      'localMapsAdded': 'Selected {n} local maps (not uploaded)',
       'srcLabel': 'Choose a map (upload a local file)',
       'uploadBtn': '📁 Upload Map Files (multi)',
+      'resLabel': 'Game resources (optional; upload a local game folder for remote servers)',
+      'gameDirBtn': '🎮 Select Game Folder',
+      'assetNoFiles': 'No usable game asset files found in the selected folder',
       'curLabel': 'Current Selection',
       'maplistEmpty': 'Upload .map / .yrm / .mpr map files (multiple allowed)',
       'paramsTitle': 'Render Options',
@@ -139,10 +205,11 @@
       'extErr': 'Only .map / .yrm / .mpr files are supported',
       'uploading': 'Uploading…',
       'uploadFail': 'Upload failed',
-      'uploadedPrefix': 'Uploaded: ',
       'uploadDone': 'Upload complete, map selected',
       'uploadBatchDone': 'Uploaded {ok}/{total} maps',
       'uploadBatchPartial': 'Uploaded {ok}/{total} maps, {bad} file(s) skipped',
+      'mapsPrefix': 'Maps: ',
+      'browserBadge': 'Local',
       'phaseParsing': 'Parsing map / rules…', 'phaseTiles': 'Drawing terrain…',
       'phaseObjects': 'Drawing buildings & units…', 'phaseEncoding': 'Encoding output…',
       'phaseDrawing': 'Drawing…',
@@ -188,8 +255,11 @@
     setEngineTag();
     if (els.infoRender.textContent === I18N.zh['infoRenderEmpty'])
       els.infoRender.textContent = t('infoRenderEmpty');
+    if (assetInfo)
+      els.assetState.textContent = tf('assetLocalReady', assetInfo);
     if (renderStateSupportsT(els.renderState.textContent))
       els.renderState.textContent = t(renderStateSupportsT(els.renderState.textContent));
+    applyModeUI();
   }
   // map current dynamic render-state text back to its i18n key (for live switch)
   function renderStateSupportsT(text) {
@@ -223,10 +293,31 @@
     return (n / 1024 / 1024).toFixed(2) + ' MB';
   }
 
+  function setRenderMode(mode, persist = true) {
+    renderMode = mode === 'browser' ? 'browser' : 'server';
+    if (persist) localStorage.setItem(MODE_KEY, renderMode);
+    applyModeUI();
+  }
+
+  function applyModeUI() {
+    const browser = renderMode === 'browser';
+    els.renderMode.querySelectorAll('button').forEach((b) => {
+      b.classList.toggle('active', b.dataset.mode === renderMode);
+    });
+    els.modeHint.textContent = t(browser ? 'modeHintBrowser' : 'modeHintServer');
+    els.srcLabel.textContent = t(browser ? 'srcLabelBrowser' : 'srcLabelServer');
+    els.resLabel.textContent = t('resLabelBrowser');
+    els.uploadBtn.querySelector('span').textContent = t(browser ? 'uploadBtnBrowser' : 'uploadBtnServer');
+    els.gameResSection.style.display = browser ? '' : 'none';
+    els.assetState.textContent = assetInfo
+      ? tf('assetLocalReady', assetInfo)
+      : t('assetStateEmptyBrowser');
+  }
+
   function selectMap(m) {
     selectedMap = m;
     els.maplist.querySelectorAll('.maplist-item').forEach((x) => {
-      x.classList.toggle('active', !!m && x.dataset.token === m.uploadToken);
+      x.classList.toggle('active', !!m && x.dataset.key === m.key);
     });
     els.renderBtn.disabled = renderBusy || !m;
     els.renderState.textContent = m ? t('selPrefix') + m.name : t('renderStateIdle');
@@ -235,7 +326,7 @@
 
   function renderMapList() {
     els.maplist.innerHTML = '';
-    if (uploadedMaps.length === 0) {
+    if (maps.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'maplist-empty';
       empty.setAttribute('data-i18n', 'maplistEmpty');
@@ -243,13 +334,15 @@
       els.maplist.appendChild(empty);
       return;
     }
-    uploadedMaps.forEach((m) => {
+    maps.forEach((m) => {
       const item = document.createElement('div');
       item.className = 'maplist-item';
-      item.dataset.token = m.uploadToken;
+      item.dataset.key = m.key;
       item.innerHTML = '<span class="ic">📤</span><span class="nm"></span><span class="sz"></span>';
       item.querySelector('.nm').textContent = m.name;
-      item.querySelector('.sz').textContent = fmtSize(m.size);
+      const isLocalOnly = m.file && !m.uploadToken;
+      item.querySelector('.sz').textContent = isLocalOnly ? t('browserBadge') : fmtSize(m.size);
+      item.querySelector('.ic').textContent = m.file ? '📄' : '📤';
       item.onclick = () => selectMap(m);
       els.maplist.appendChild(item);
     });
@@ -277,15 +370,16 @@
         });
         const data = await resp.json();
         if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
-        uploadedMaps.push({ name: data.name, size: data.size, uploadToken: data.token });
+        const entry = { key: 'up:' + data.token, name: data.name, size: data.size, uploadToken: data.token, file };
+        maps.push(entry);
         ok++;
-        if (!selectedMap) selectedMap = uploadedMaps[uploadedMaps.length - 1];
+        if (!selectedMap) selectedMap = entry;
       } catch (e) {
         lastErr = e;
       }
     }
     renderMapList();
-    els.infoMaps.textContent = t('uploadedPrefix') + uploadedMaps.length;
+    els.infoMaps.textContent = t('mapsPrefix') + maps.length;
     if (ok === 0) {
       setStatus('err', t('uploadFail') + (lastErr ? ': ' + (lastErr.message || lastErr) : ''));
       return;
@@ -295,6 +389,40 @@
       : tf('uploadBatchDone', { ok, total: valid.length });
     setStatus('ok', msg);
   }
+
+  function addLocalMaps(fileList) {
+    const files = Array.from(fileList || []);
+    const valid = files.filter((f) => /\.(map|yrm|mpr)$/i.test(f.name));
+    if (!valid.length) {
+      setStatus('err', t('extErr')); return;
+    }
+    let added = 0;
+    for (const file of valid) {
+      const key = 'file:' + file.name + ':' + file.size + ':' + (file.lastModified || 0);
+      const existing = maps.find((m) => m.key === key);
+      if (existing) {
+        if (!selectedMap) selectedMap = existing;
+        continue;
+      }
+      const entry = { key, name: file.name, size: file.size, file };
+      maps.push(entry);
+      if (!selectedMap) selectedMap = entry;
+      added++;
+    }
+    renderMapList();
+    els.infoMaps.textContent = t('mapsPrefix') + maps.length;
+    setStatus('ok', tf('localMapsAdded', { n: added || valid.length }));
+  }
+
+  function setLocalAssets(files) {
+    gameFiles = files;
+    const size = files.reduce((sum, f) => sum + f.size, 0);
+    assetInfo = { n: files.length, size: fmtSize(size) };
+    els.assetState.textContent = tf('assetLocalReady', assetInfo);
+    setStatus('ok', els.assetState.textContent);
+  }
+
+  const ASSET_RE = /\.(mix|mmx|yro|ini|csf|pal|shp|tmp|vxl|hva|vpl|pkt)$/i;
 
   function setProgress(pct, phase) {
     pct = Math.max(0, Math.min(100, pct));
@@ -309,7 +437,7 @@
       els.placeholder.style.display = 'none';
       els.previewImg.style.display = 'block';
     };
-    els.previewImg.src = url + '?t=' + Date.now();
+    els.previewImg.src = url.startsWith('blob:') ? url : url + '?t=' + Date.now();
     if (meta) els.previewMeta.textContent = meta;
   }
 
@@ -391,20 +519,134 @@
     zoomAt(e.deltaY < 0 ? 1.1 : 0.9, e.clientX - rect.left, e.clientY - rect.top);
   }, { passive: false });
 
-  async function render() {
+  async function ensureServerUpload(entry) {
+    if (entry.uploadToken) return;
+    if (!entry.file) throw new Error(t('browserNoMapFile'));
+    const resp = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'X-Filename': encodeURIComponent(entry.name) },
+      body: entry.file,
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
+    entry.uploadToken = data.token;
+    entry.key = 'up:' + data.token;
+    entry.size = data.size;
+    renderMapList();
+  }
+
+  function engineKeyFromName(name) {
+    const keys = {
+      RedAlert2: 'engineRA2', YurisRevenge: 'engineYR', TiberianSun: 'engineTS', Firestorm: 'engineFS',
+    };
+    return keys[name] || 'engineAuto';
+  }
+
+  function render() {
+    if (renderMode === 'browser') void renderBrowser();
+    else void renderServer();
+  }
+
+  async function renderBrowser() {
     if (renderBusy) return;
     if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
+    if (!selectedMap.file) { setStatus('err', t('browserNoMapFile')); return; }
+    if (!gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
+    if (!BR_CLIENT || !BR_CLIENT.supported()) {
+      setRenderMode('server');
+      setStatus('err', t('browserUnsupported'));
+      return renderServer();
+    }
 
-    const body = {
-      uploadToken: selectedMap.uploadToken,
-      name: selectedMap.name,
-      format: els.format.value,
-      engine: els.engine.value,
-      sizeMode: els.sizeMode.value,
-      pngCompression: els.pngCompression.value,
-      markStartPos: els.markStartPos.checked,
-      markOre: els.markOre.checked,
-    };
+    renderBusy = true;
+    els.renderBtn.disabled = true;
+    renderStart = Date.now();
+    setProgress(0, t('phaseSubmit'));
+    els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
+    els.progressWrap.classList.add('show');
+    setStatus('work', t('rendering'));
+
+    let fallback = false;
+    let startedRendering = false;
+    try {
+      if (!br) br = BR_CLIENT.create();
+      setProgress(1, t('workerStarting'));
+      const caps = await br.start();
+      if (!caps.fileReaderSync || !caps.offscreen) {
+        fallback = true;
+        throw Object.assign(new Error(t('browserUnsupported')), { code: 'UNSUPPORTED' });
+      }
+      const sig = gameFiles.map((f) => f.name + ':' + f.size + ':' + (f.lastModified || 0)).join('|');
+      if (sig !== brAssetsSig) {
+        setProgress(2, t('phaseAssets'));
+        await br.setAssets(gameFiles);
+        brAssetsSig = sig;
+      }
+      startedRendering = true;
+      const res = await br.render(selectedMap.file, selectedMap.name, {
+        format: els.format.value,
+        engine: els.engine.value,
+        sizeMode: els.sizeMode.value,
+        markStartPos: els.markStartPos.checked,
+        markOre: els.markOre.checked,
+      }, (pct, phase) => {
+        setProgress(pct, phaseLabel(phase));
+      });
+
+      setProgress(100, t('complete'));
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      blobUrl = URL.createObjectURL(res.blob);
+      currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
+      showPreview(blobUrl, res.name);
+      els.downloadBtn.disabled = false;
+      els.downloadBtn.dataset.url = blobUrl;
+      els.downloadBtn.dataset.name = res.name;
+      const ms = Date.now() - (renderStart || Date.now());
+      const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
+      const engKey = engineKeyFromName(res.engine);
+      els.engineTag.textContent = t('enginePrefix') + t(engKey);
+      els.infoRender.textContent = t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
+      els.renderState.textContent = t('renderDone');
+      setStatus('ok', t('complete'));
+    } catch (e) {
+      const code = e && e.code;
+      if (code === 'UNSUPPORTED') {
+        fallback = true;
+        setRenderMode('server');
+        setStatus('err', t('browserUnsupported'));
+        if (br) { try { br.terminate(); } catch (err) { /* ignore */ } }
+        br = null;
+        brAssetsSig = '';
+      } else if (!code && !startedRendering) {
+        // Worker script could not start (missing bundle / blocked). Use the server.
+        fallback = true;
+        setRenderMode('server');
+        setStatus('err', t('browserUnsupported'));
+        if (br) { try { br.terminate(); } catch (err) { /* ignore */ } }
+        br = null;
+        brAssetsSig = '';
+      } else {
+        if (code === 'SURFACE_TOO_LARGE') setStatus('err', t('browserSurfaceTooLarge'));
+        else if (code === 'ENCODE_UNSUPPORTED') setStatus('err', t('browserEncodeUnsupported'));
+        else if (code === 'ASSETS_MISSING') setStatus('err', t('browserAssetsMissing'));
+        else setStatus('err', t('browserRenderFailed') + ': ' + (e && e.message || e));
+        els.renderState.textContent = t('renderFailed');
+        if (!code) {
+          if (br) { try { br.terminate(); } catch (err) { /* ignore */ } }
+          br = null;
+          brAssetsSig = '';
+        }
+      }
+    } finally {
+      renderBusy = false;
+      els.renderBtn.disabled = !selectedMap;
+    }
+    if (fallback) return renderServer();
+  }
+
+  async function renderServer() {
+    if (renderBusy) return;
+    if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
 
     renderBusy = true;
     els.renderBtn.disabled = true;
@@ -415,6 +657,18 @@
     setStatus('work', t('rendering'));
 
     try {
+      await ensureServerUpload(selectedMap);
+      const body = {
+        name: selectedMap.name,
+        format: els.format.value,
+        engine: els.engine.value,
+        sizeMode: els.sizeMode.value,
+        pngCompression: els.pngCompression.value,
+        markStartPos: els.markStartPos.checked,
+        markOre: els.markOre.checked,
+      };
+      if (selectedMap.uploadToken) body.uploadToken = selectedMap.uploadToken;
+
       const resp = await fetch('/api/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -498,9 +752,24 @@
   }
 
   // events
+  els.renderMode.querySelectorAll('button').forEach((b) => {
+    b.onclick = () => { setRenderMode(b.dataset.mode); };
+  });
   els.uploadBtn.onclick = () => els.fileInput.click();
+  els.gameDirBtn.onclick = () => els.gameDirInput.click();
+  els.gameDirInput.addEventListener('change', () => {
+    if (els.gameDirInput.files && els.gameDirInput.files.length) {
+      const files = Array.from(els.gameDirInput.files).filter((f) => ASSET_RE.test(f.name));
+      if (!files.length) setStatus('err', t('assetNoFiles'));
+      else setLocalAssets(files);
+    }
+    els.gameDirInput.value = '';
+  });
   els.fileInput.addEventListener('change', () => {
-    if (els.fileInput.files && els.fileInput.files.length) uploadMaps(els.fileInput.files);
+    if (els.fileInput.files && els.fileInput.files.length) {
+      if (renderMode === 'server') uploadMaps(els.fileInput.files);
+      else addLocalMaps(els.fileInput.files);
+    }
     els.fileInput.value = '';
   });
   els.downloadBtn.onclick = () => {

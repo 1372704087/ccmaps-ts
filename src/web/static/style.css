@@ -179,8 +179,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;heigh
 
 /* ---------- upload ---------- */
 .upload-lg{width:100%;padding:12px;font-size:14px;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.asset-state{font-size:11px;color:var(--muted);margin:2px 0 4px;line-height:1.5;word-break:break-all}
 .modal-close{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1}
 .modal-close:hover{color:var(--text)}
+
+/* ---------- render location switch ---------- */
+.segmented{display:flex;gap:6px;padding:4px;border:1px solid var(--panel-border);border-radius:10px;background:rgba(255,255,255,.03)}
+.segmented button{
+  flex:1;border:none;border-radius:7px;padding:7px 8px;font-size:12px;font-weight:600;cursor:pointer;
+  background:transparent;color:var(--muted);transition:background .15s,color .15s;
+}
+.segmented button:hover{color:var(--text)}
+.segmented button.active{background:rgba(56,224,141,.16);color:var(--accent)}
+.segmented button:disabled{opacity:.4;cursor:not-allowed}
+.mode-hint{font-size:11px;color:var(--muted);margin:6px 0 10px;line-height:1.5}
 
 /* ---------- lightbox ---------- */
 .lightbox-backdrop{

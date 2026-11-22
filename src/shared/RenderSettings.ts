@@ -1,6 +1,8 @@
 // Port of CNCMaps.Shared.RenderSettings (CLI options holder)
 import { EngineType, SizeMode, StartPositionMarking, PreviewMarkersType } from './Enums.js';
 import { logger } from './Log.js';
+import type { DrawingSurface } from '../rendering/DrawingSurface.js';
+import type { Rectangle } from './Geometry.js';
 
 export class RenderSettings {
   InputFile = '';
@@ -50,6 +52,14 @@ export class RenderSettings {
   VeinRandomizer = '';
   PinRandomDraws = false;
   AnimFrame = -1;
+
+  /// <summary>When set, the renderer hands back the finished surface instead of
+  /// writing a PNG. Used by the browser worker, where encoding happens on a canvas.</summary>
+  OutputSink: ((surface: DrawingSurface, rect: Rectangle) => void) | null = null;
+  /// <summary>Optional progress callback; takes precedence over stdout progress lines.</summary>
+  ProgressSink: ((percent: number, phase: string) => void) | null = null;
+  /// <summary>Safety limit for in-memory rendering (0 = unlimited).</summary>
+  MaxSurfacePixels = 0;
 
   /// <summary>The game's own multiplayer colour order: start position N carries colour N.
   /// Read off captures whose spawn pinned one player per start position.</summary>

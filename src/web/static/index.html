@@ -31,7 +31,14 @@
   <section class="panel sources">
     <h2 class="panel-title"><span>01</span><span data-i18n="srcTitle">地图来源</span></h2>
 
-    <label class="field-label" data-i18n="srcLabel">选择地图（上传本机地图文件）</label>
+    <label class="field-label" data-i18n="modeLabel">渲染位置</label>
+    <div class="segmented" id="renderMode">
+      <button type="button" class="active" data-mode="browser" data-i18n="modeBrowser">浏览器（不上传）</button>
+      <button type="button" data-mode="server" data-i18n="modeServer">服务器</button>
+    </div>
+    <div class="mode-hint" id="modeHint" data-i18n="modeHintBrowser">地图与游戏资源只在本机浏览器读取，不上传服务器</div>
+
+    <label class="field-label" id="srcLabel" data-i18n="srcLabel">选择地图（上传本机地图文件）</label>
     <div class="row">
       <button id="uploadBtn" class="btn btn-ghost upload-lg"><span data-i18n="uploadBtn">📁 上传地图文件（可多选）</span></button>
     </div>
@@ -40,6 +47,15 @@
     <label class="field-label" data-i18n="curLabel">当前选择</label>
     <div class="maplist" id="maplist">
       <div class="maplist-empty" data-i18n="maplistEmpty">请上传 .map / .yrm / .mpr 地图文件（支持多选）</div>
+    </div>
+
+    <div id="gameResSection">
+      <label class="field-label" id="resLabel" data-i18n="resLabel">游戏资源（选择本机游戏目录，不上传）</label>
+      <div class="row">
+        <button id="gameDirBtn" class="btn btn-ghost upload-lg"><span data-i18n="gameDirBtn">🎮 选择游戏目录</span></button>
+      </div>
+      <input id="gameDirInput" type="file" webkitdirectory directory multiple hidden>
+      <div class="asset-state" id="assetState" data-i18n="assetStateEmptyBrowser">未选择游戏目录，浏览器渲染需要游戏资源</div>
     </div>
   </section>
 
@@ -153,6 +169,7 @@
   </div>
 </div>
 
+<script src="browser-render.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
