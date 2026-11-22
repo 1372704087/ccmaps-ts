@@ -33,13 +33,13 @@
 
     <label class="field-label" data-i18n="srcLabel">选择地图（上传本机地图文件）</label>
     <div class="row">
-      <button id="uploadBtn" class="btn btn-ghost upload-lg"><span data-i18n="uploadBtn">📁 上传地图文件</span></button>
+      <button id="uploadBtn" class="btn btn-ghost upload-lg"><span data-i18n="uploadBtn">📁 上传地图文件（可多选）</span></button>
     </div>
-    <input id="fileInput" type="file" accept=".map,.yrm,.mpr" hidden>
+    <input id="fileInput" type="file" accept=".map,.yrm,.mpr" multiple hidden>
 
     <label class="field-label" data-i18n="curLabel">当前选择</label>
     <div class="maplist" id="maplist">
-      <div class="maplist-empty" data-i18n="maplistEmpty">请上传一个 .map / .yrm / .mpr 地图文件</div>
+      <div class="maplist-empty" data-i18n="maplistEmpty">请上传 .map / .yrm / .mpr 地图文件（支持多选）</div>
     </div>
   </section>
 

@@ -23,6 +23,7 @@
   };
 
   let selectedMap = null;
+  const uploadedMaps = [];
   let renderBusy = false;
   let currentImage = null;
   let renderStart = 0;
@@ -37,9 +38,9 @@
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · 地图渲染器',
       'srcTitle': '地图来源',
       'srcLabel': '选择地图（上传本机地图文件）',
-      'uploadBtn': '📁 上传地图文件',
+      'uploadBtn': '📁 上传地图文件（可多选）',
       'curLabel': '当前选择',
-      'maplistEmpty': '请上传一个 .map / .yrm / .mpr 地图文件',
+      'maplistEmpty': '请上传 .map / .yrm / .mpr 地图文件（支持多选）',
       'paramsTitle': '渲染参数',
       'lblFormat': '输出格式',
       'lblEngine': '引擎',
@@ -75,9 +76,9 @@
       'extErr': '仅支持 .map / .yrm / .mpr 文件',
       'uploading': '上传中…',
       'uploadFail': '上传失败',
-      'uploaded': '已上传',
       'uploadedPrefix': '已上传：',
-      'uploadDone': '上传完成，已选择地图',
+      'uploadBatchDone': '已上传 {ok}/{total} 个地图',
+      'uploadBatchPartial': '已上传 {ok}/{total} 个地图，{bad} 个文件被跳过',
       'phaseParsing': '解析地图 / 规则…', 'phaseTiles': '绘制地形…',
       'phaseObjects': '绘制建筑与单位…', 'phaseEncoding': '编码输出…',
       'phaseDrawing': '绘制中…',
@@ -100,9 +101,9 @@
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · Map Renderer',
       'srcTitle': 'Map Source',
       'srcLabel': 'Choose a map (upload a local file)',
-      'uploadBtn': '📁 Upload Map File',
+      'uploadBtn': '📁 Upload Map Files (multi)',
       'curLabel': 'Current Selection',
-      'maplistEmpty': 'Please upload a .map / .yrm / .mpr map file',
+      'maplistEmpty': 'Upload .map / .yrm / .mpr map files (multiple allowed)',
       'paramsTitle': 'Render Options',
       'lblFormat': 'Output Format',
       'lblEngine': 'Engine',
@@ -138,9 +139,10 @@
       'extErr': 'Only .map / .yrm / .mpr files are supported',
       'uploading': 'Uploading…',
       'uploadFail': 'Upload failed',
-      'uploaded': 'Uploaded',
       'uploadedPrefix': 'Uploaded: ',
       'uploadDone': 'Upload complete, map selected',
+      'uploadBatchDone': 'Uploaded {ok}/{total} maps',
+      'uploadBatchPartial': 'Uploaded {ok}/{total} maps, {bad} file(s) skipped',
       'phaseParsing': 'Parsing map / rules…', 'phaseTiles': 'Drawing terrain…',
       'phaseObjects': 'Drawing buildings & units…', 'phaseEncoding': 'Encoding output…',
       'phaseDrawing': 'Drawing…',
@@ -160,6 +162,7 @@
   };
   let LANG = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh';
   const t = (key) => (I18N[LANG] && I18N[LANG][key] !== undefined ? I18N[LANG][key] : (I18N.zh[key] || key));
+  const tf = (key, vars) => t(key).replace(/\{(\w+)\}/g, (s, k) => (vars[k] !== undefined ? vars[k] : s));
 
   function applyLang() {
     document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
@@ -220,43 +223,77 @@
     return (n / 1024 / 1024).toFixed(2) + ' MB';
   }
 
-  function selectMap(m, item) {
+  function selectMap(m) {
     selectedMap = m;
-    document.querySelectorAll('.maplist-item').forEach((x) => x.classList.remove('active'));
-    if (item) item.classList.add('active');
-    els.renderBtn.disabled = renderBusy ? true : false;
-    els.renderState.textContent = t('selPrefix') + m.name;
+    els.maplist.querySelectorAll('.maplist-item').forEach((x) => {
+      x.classList.toggle('active', !!m && x.dataset.token === m.uploadToken);
+    });
+    els.renderBtn.disabled = renderBusy || !m;
+    els.renderState.textContent = m ? t('selPrefix') + m.name : t('renderStateIdle');
     setStatus('ok', t('selMap'));
   }
 
-  async function uploadMap(file) {
-    if (!file) return;
-    if (!/\.(map|yrm|mpr)$/i.test(file.name)) {
+  function renderMapList() {
+    els.maplist.innerHTML = '';
+    if (uploadedMaps.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'maplist-empty';
+      empty.setAttribute('data-i18n', 'maplistEmpty');
+      empty.textContent = t('maplistEmpty');
+      els.maplist.appendChild(empty);
+      return;
+    }
+    uploadedMaps.forEach((m) => {
+      const item = document.createElement('div');
+      item.className = 'maplist-item';
+      item.dataset.token = m.uploadToken;
+      item.innerHTML = '<span class="ic">📤</span><span class="nm"></span><span class="sz"></span>';
+      item.querySelector('.nm').textContent = m.name;
+      item.querySelector('.sz').textContent = fmtSize(m.size);
+      item.onclick = () => selectMap(m);
+      els.maplist.appendChild(item);
+    });
+    if (selectedMap) selectMap(selectedMap);
+  }
+
+  async function uploadMaps(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const valid = files.filter((f) => /\.(map|yrm|mpr)$/i.test(f.name));
+    const bad = files.length - valid.length;
+    if (!valid.length) {
       setStatus('err', t('extErr')); return;
     }
-    setStatus('work', t('uploading'));
-    try {
-      const resp = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'X-Filename': encodeURIComponent(file.name) },
-        body: file,
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
-      // clear the map list control to its uploaded-map selection
-      els.maplist.innerHTML = '';
-      const item = document.createElement('div');
-      item.className = 'maplist-item active';
-      item.innerHTML = '<span class="ic">📤</span><span class="nm"></span><span class="sz"></span>';
-      item.querySelector('.nm').textContent = data.name;
-      item.querySelector('.sz').textContent = t('uploaded');
-      els.maplist.appendChild(item);
-      selectMap({ name: data.name, size: data.size, uploadToken: data.token }, item);
-      els.infoMaps.textContent = t('uploadedPrefix') + data.name;
-      setStatus('ok', t('uploadDone'));
-    } catch (e) {
-      setStatus('err', t('uploadFail') + ': ' + (e && e.message || e));
+    let ok = 0;
+    let lastErr = null;
+    for (let i = 0; i < valid.length; i++) {
+      const file = valid[i];
+      setStatus('work', t('uploading') + ' ' + (i + 1) + '/' + valid.length);
+      try {
+        const resp = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'X-Filename': encodeURIComponent(file.name) },
+          body: file,
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
+        uploadedMaps.push({ name: data.name, size: data.size, uploadToken: data.token });
+        ok++;
+        if (!selectedMap) selectedMap = uploadedMaps[uploadedMaps.length - 1];
+      } catch (e) {
+        lastErr = e;
+      }
     }
+    renderMapList();
+    els.infoMaps.textContent = t('uploadedPrefix') + uploadedMaps.length;
+    if (ok === 0) {
+      setStatus('err', t('uploadFail') + (lastErr ? ': ' + (lastErr.message || lastErr) : ''));
+      return;
+    }
+    const msg = bad > 0
+      ? tf('uploadBatchPartial', { ok, total: valid.length, bad })
+      : tf('uploadBatchDone', { ok, total: valid.length });
+    setStatus('ok', msg);
   }
 
   function setProgress(pct, phase) {
@@ -463,7 +500,7 @@
   // events
   els.uploadBtn.onclick = () => els.fileInput.click();
   els.fileInput.addEventListener('change', () => {
-    if (els.fileInput.files && els.fileInput.files[0]) uploadMap(els.fileInput.files[0]);
+    if (els.fileInput.files && els.fileInput.files.length) uploadMaps(els.fileInput.files);
     els.fileInput.value = '';
   });
   els.downloadBtn.onclick = () => {
