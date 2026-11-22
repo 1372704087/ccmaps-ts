@@ -18,6 +18,7 @@
   class BrowserRenderer {
     constructor() {
       this.seq = 0;
+      this.onLog = null;
       this.pending = new Map();
       this.assetWaiter = null;
       this.readyWaiter = null;
@@ -52,7 +53,9 @@
         return;
       }
       if (msg.type === 'log') {
-        if (msg.level >= 4) console.warn('[cncmaps worker]', msg.message);
+        if (this.onLog) {
+          try { this.onLog(msg.level, msg.message); } catch (e) { /* ignore */ }
+        } else if (msg.level >= 4) console.warn('[cncmaps worker]', msg.message);
         return;
       }
       if (msg.type === 'result' || msg.type === 'error') {

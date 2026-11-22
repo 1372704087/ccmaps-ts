@@ -2,25 +2,32 @@
 (function () {
   'use strict';
 
+  // Keep in sync with package.json.
+  const APP_VERSION = '1.1.0';
+
   const $ = (id) => document.getElementById(id);
   const els = {
     renderMode: $('renderMode'), modeHint: $('modeHint'),
     srcLabel: $('srcLabel'), resLabel: $('resLabel'),
-    maplist: $('maplist'), mapInfo: $('mapInfo'), mapInfoSummary: $('mapInfoSummary'), mapInfoBody: $('mapInfoBody'),
+    maplist: $('maplist'), clearMapsBtn: $('clearMapsBtn'), mapInfo: $('mapInfo'), mapInfoSummary: $('mapInfoSummary'), mapInfoBody: $('mapInfoBody'),
     sources: document.querySelector('.panel.sources'),
     gameDirBtn: $('gameDirBtn'), gameDirInput: $('gameDirInput'), assetState: $('assetState'),
     gameResSection: $('gameResSection'),
     uploadBtn: $('uploadBtn'), fileInput: $('fileInput'),
     format: $('format'), engine: $('engine'), sizeMode: $('sizeMode'),
     pngCompression: $('pngCompression'), pngCompressionVal: $('pngCompressionVal'),
-    pngCompressionField: $('pngCompressionField'),
+    previewWidth: $('previewWidth'), jpegQuality: $('jpegQuality'), jpegQualityVal: $('jpegQualityVal'),
+    jpegQualityField: $('jpegQualityField'), pngCompressionField: $('pngCompressionField'),
+    presetSelect: $('presetSelect'), presetSaveBtn: $('presetSaveBtn'), presetDeleteBtn: $('presetDeleteBtn'),
+    serverHealth: $('serverHealth'), appVersion: $('appVersion'),
     markStartPos: $('markStartPos'), markOre: $('markOre'),
-    renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), renderState: $('renderState'),
+    renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), cancelBtn: $('cancelBtn'), renderState: $('renderState'),
     progressWrap: $('progressWrap'), progressFill: $('progressFill'),
     progressPct: $('progressPct'), progressPhase: $('progressPhase'),
+    renderLog: $('renderLog'), logBody: $('logBody'), logCount: $('logCount'), logClearBtn: $('logClearBtn'),
     previewFrame: $('previewFrame'), placeholder: $('placeholder'), previewImg: $('previewImg'),
     previewMeta: $('previewMeta'), downloadBtn: $('downloadBtn'),
-    renderHistory: $('renderHistory'), renderHistoryList: $('renderHistoryList'),
+    renderHistory: $('renderHistory'), renderHistoryList: $('renderHistoryList'), clearHistoryBtn: $('clearHistoryBtn'),
     lightbox: $('lightbox'), lightboxImg: $('lightboxImg'), lightboxTitle: $('lightboxTitle'),
     lightboxClose: $('lightboxClose'), lightboxDownload: $('lightboxDownload'),
     lightboxBody: $('lightboxBody'), zoomPct: $('zoomPct'),
@@ -35,6 +42,10 @@
   let gameFiles = [];
   let renderBusy = false;
   let batchBusy = false;
+  let cancelRequested = false;
+  let batchCancelled = false;
+  let currentJobId = null;
+  let abortController = null;
   let lastRenderResult = null;
   let zipBlob = null;
   const renderHistory = [];
@@ -94,6 +105,10 @@
       'assetNoFiles': '所选目录中没有可用的游戏资源文件',
       'curLabel': '当前选择',
       'maplistEmpty': '请上传 .map / .yrm / .mpr 地图文件（支持多选）',
+      'clearMaps': '清空',
+      'removeMap': '移除',
+      'mapsCleared': '已清空地图列表',
+      'mapRemoved': '已移除地图',
       'paramsTitle': '渲染参数',
       'lblFormat': '输出格式',
       'lblEngine': '引擎',
@@ -107,6 +122,20 @@
       'sizeLocal': '局部 (LocalSize)',
       'sizeFull': '全图 (FullMap)',
       'lblPngComp': 'PNG 压缩',
+      'lblJpegQuality': 'JPEG 质量',
+      'lblPreviewWidth': '预览宽度',
+      'previewOriginal': '原始尺寸',
+      'presetCustom': '自定义参数',
+      'presetSave': '保存预设',
+      'presetDelete': '删除',
+      'presetNamePrompt': '预设名称：',
+      'presetSaved': '预设已保存',
+      'presetDeleted': '预设已删除',
+      'presetDeleteConfirm': '删除这个预设？',
+      'serverOk': '服务器就绪：游戏目录 {dirs} 个 · 并发 {active}/{max}',
+      'serverQueued': '排队 {n}',
+      'serverNoDirs': '服务器未配置游戏资源（浏览器模式可用）',
+      'serverDirInvalid': '服务器游戏目录无效或缺少 .mix 文件',
       'tglStartPos': '标记出生点',
       'tglOre': '高亮矿石',
       'renderBtn': '开始渲染',
@@ -164,6 +193,21 @@
       'reqFailedPrefix': '请求失败：',
       'recentPrefix': '最近: ',
       'historyTitle': '渲染结果',
+      'historyClear': '清空',
+      'historyClearConfirm': '清空全部渲染历史？',
+      'historyCleared': '渲染历史已清空',
+      'historyReuse': '复用参数',
+      'historyReuseTitle': '套用该次渲染参数并重新渲染',
+      'historyNoMap': '已套用参数，但地图列表中找不到对应地图',
+      'historyNoParams': '该历史记录没有保存的渲染参数',
+      'logTitle': '渲染日志',
+      'logClear': '清空',
+      'versionTitle': '当前版本',
+      'cancelBtn': '取消',
+      'cancelling': '正在取消…',
+      'cancelled': '已取消',
+      'queuedPos': '排队中（第 {pos} 位）',
+      'batchCancelled': '批量渲染已取消',
     },
     en: {
       'title': 'CNCMaps TS · Map Renderer',
@@ -199,6 +243,10 @@
       'assetNoFiles': 'No usable game asset files found in the selected folder',
       'curLabel': 'Current Selection',
       'maplistEmpty': 'Upload .map / .yrm / .mpr map files (multiple allowed)',
+      'clearMaps': 'Clear',
+      'removeMap': 'Remove',
+      'mapsCleared': 'Map list cleared',
+      'mapRemoved': 'Map removed',
       'paramsTitle': 'Render Options',
       'lblFormat': 'Output Format',
       'lblEngine': 'Engine',
@@ -212,6 +260,20 @@
       'sizeLocal': 'Local (LocalSize)',
       'sizeFull': 'Full Map',
       'lblPngComp': 'PNG Compression',
+      'lblJpegQuality': 'JPEG Quality',
+      'lblPreviewWidth': 'Preview Width',
+      'previewOriginal': 'Original Size',
+      'presetCustom': 'Custom',
+      'presetSave': 'Save Preset',
+      'presetDelete': 'Delete',
+      'presetNamePrompt': 'Preset name:',
+      'presetSaved': 'Preset saved',
+      'presetDeleted': 'Preset deleted',
+      'presetDeleteConfirm': 'Delete this preset?',
+      'serverOk': 'Server ready: {dirs} game dir(s) · concurrency {active}/{max}',
+      'serverQueued': '{n} queued',
+      'serverNoDirs': 'Server has no game resources (browser mode still works)',
+      'serverDirInvalid': 'Server game directories are invalid or contain no .mix files',
       'tglStartPos': 'Mark Start Positions',
       'tglOre': 'Highlight Ore',
       'renderBtn': 'Start Render',
@@ -270,6 +332,21 @@
       'reqFailedPrefix': 'Request failed: ',
       'recentPrefix': 'Recent: ',
       'historyTitle': 'Rendered Images',
+      'historyClear': 'Clear',
+      'historyClearConfirm': 'Clear all render history?',
+      'historyCleared': 'Render history cleared',
+      'historyReuse': 'Reuse settings',
+      'historyReuseTitle': 'Apply these settings and render again',
+      'historyNoMap': 'Settings applied, but no matching map is in the list',
+      'historyNoParams': 'This history entry has no saved settings',
+      'logTitle': 'Render log',
+      'logClear': 'Clear',
+      'versionTitle': 'Version',
+      'cancelBtn': 'Cancel',
+      'cancelling': 'Cancelling…',
+      'cancelled': 'Cancelled',
+      'queuedPos': 'Queued (position {pos})',
+      'batchCancelled': 'Batch render cancelled',
     },
   };
   let LANG = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh';
@@ -297,6 +374,7 @@
         + t('creditHint') + ' | CNCMaps TS · by 1372704087';
     }
     els.langBtn.textContent = t('langBtn');
+    els.appVersion.title = t('versionTitle') + ' ' + APP_VERSION;
     setEngineTag();
     if (els.infoRender.textContent === I18N.zh['infoRenderEmpty'])
       els.infoRender.textContent = t('infoRenderEmpty');
@@ -306,6 +384,8 @@
     if (renderStateSupportsT(els.renderState.textContent))
       els.renderState.textContent = t(renderStateSupportsT(els.renderState.textContent));
     applyModeUI();
+    populatePresets(els.presetSelect.value === '' ? null : Number(els.presetSelect.value));
+    renderHistoryList();
   }
   // map current dynamic render-state text back to its i18n key (for live switch)
   function renderStateSupportsT(text) {
@@ -344,6 +424,7 @@
     if (persist) localStorage.setItem(MODE_KEY, renderMode);
     applyModeUI();
     if (renderMode === 'browser' && !gameFiles.length) void restoreGameDir();
+    else if (renderMode === 'server') void refreshServerHealth();
   }
 
   function applyModeUI() {
@@ -366,6 +447,151 @@
     els.renderBtn.disabled = !idle || !selectedMap;
     els.renderAllBtn.disabled = !idle || maps.length === 0;
     els.zipBtn.disabled = !idle || !zipBlob;
+    els.cancelBtn.hidden = idle;
+    els.cancelBtn.disabled = cancelRequested;
+    els.clearMapsBtn.disabled = !idle || maps.length === 0;
+  }
+
+  function cancelRender() {
+    if (!renderBusy && !batchBusy) return;
+    if (cancelRequested) return;
+    cancelRequested = true;
+    if (batchBusy) batchCancelled = true;
+    setStatus('work', t('cancelling'));
+    updateRenderButtons();
+    if (br) {
+      try { br.terminate(); } catch (e) { /* ignore */ }
+      br = null;
+      brAssetsSig = '';
+    }
+    if (currentJobId) {
+      fetch('/api/render/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: currentJobId }),
+      }).catch(() => {});
+    }
+    if (abortController) {
+      try { abortController.abort(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function applyFormatFields() {
+    const jpg = els.format.value === 'jpg';
+    els.pngCompressionField.style.display = jpg ? 'none' : '';
+    els.jpegQualityField.style.display = jpg ? '' : 'none';
+  }
+
+  const PRESET_KEY = 'cncmaps_presets';
+
+  function loadPresets() {
+    try {
+      const list = JSON.parse(localStorage.getItem(PRESET_KEY) || '[]');
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function storePresets(list) {
+    localStorage.setItem(PRESET_KEY, JSON.stringify(list));
+  }
+
+  function currentPresetValues() {
+    return {
+      format: els.format.value,
+      engine: els.engine.value,
+      sizeMode: els.sizeMode.value,
+      previewWidth: els.previewWidth.value,
+      pngCompression: els.pngCompression.value,
+      jpegQuality: els.jpegQuality.value,
+      markStartPos: els.markStartPos.checked,
+      markOre: els.markOre.checked,
+    };
+  }
+
+  function applyPresetValues(values) {
+    if (!values) return;
+    els.format.value = values.format === 'jpg' ? 'jpg' : 'png';
+    els.engine.value = values.engine || '';
+    els.sizeMode.value = values.sizeMode || '';
+    els.previewWidth.value = values.previewWidth || '0';
+    els.pngCompression.value = values.pngCompression || '4';
+    els.pngCompressionVal.textContent = els.pngCompression.value;
+    els.jpegQuality.value = values.jpegQuality || '95';
+    els.jpegQualityVal.textContent = els.jpegQuality.value;
+    els.markStartPos.checked = !!values.markStartPos;
+    els.markOre.checked = !!values.markOre;
+    applyFormatFields();
+    setEngineTag();
+  }
+
+  function populatePresets(selectedIndex) {
+    const presets = loadPresets();
+    els.presetSelect.innerHTML = '';
+    const custom = document.createElement('option');
+    custom.value = '';
+    custom.textContent = t('presetCustom');
+    els.presetSelect.appendChild(custom);
+    presets.forEach((preset, index) => {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = preset.name;
+      els.presetSelect.appendChild(option);
+    });
+    els.presetSelect.value = selectedIndex != null && presets[selectedIndex] ? String(selectedIndex) : '';
+  }
+
+  function savePreset() {
+    const presetName = (window.prompt(t('presetNamePrompt'), '') || '').trim();
+    if (!presetName) return;
+    const presets = loadPresets();
+    const values = currentPresetValues();
+    const existing = presets.findIndex((p) => p.name === presetName);
+    if (existing >= 0) presets[existing].values = values;
+    else presets.push({ name: presetName, values });
+    storePresets(presets);
+    populatePresets(existing >= 0 ? existing : presets.length - 1);
+    setStatus('ok', t('presetSaved'));
+  }
+
+  function deletePreset() {
+    if (els.presetSelect.value === '') return;
+    if (!window.confirm(t('presetDeleteConfirm'))) return;
+    const presets = loadPresets();
+    presets.splice(Number(els.presetSelect.value), 1);
+    storePresets(presets);
+    populatePresets();
+    setStatus('ok', t('presetDeleted'));
+  }
+
+  async function refreshServerHealth() {
+    try {
+      const resp = await fetch('/api/health');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const health = await resp.json();
+      if (health.gameDirs === 0) {
+        els.serverHealth.textContent = t('serverNoDirs');
+        els.serverHealth.classList.add('warn');
+        return;
+      }
+      if (health.gameDirsValid === 0) {
+        els.serverHealth.textContent = t('serverDirInvalid');
+        els.serverHealth.classList.add('warn');
+        return;
+      }
+      let text = tf('serverOk', {
+        dirs: health.gameDirsValid,
+        active: health.activeRenderJobs,
+        max: health.maxRenderJobs,
+      });
+      if (health.queuedRenders > 0) text += ' · ' + tf('serverQueued', { n: health.queuedRenders });
+      els.serverHealth.textContent = text;
+      els.serverHealth.classList.remove('warn');
+    } catch (e) {
+      els.serverHealth.textContent = '';
+      els.serverHealth.classList.remove('warn');
+    }
   }
 
   function selectMap(m) {
@@ -401,10 +627,46 @@
       item.querySelector('.sz').textContent = isLocalOnly ? t('browserBadge') : fmtSize(m.size);
       item.querySelector('.ic').textContent = m.file ? '📄' : '📤';
       item.onclick = () => selectMap(m);
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'ml-remove';
+      rm.textContent = '×';
+      rm.title = t('removeMap');
+      rm.setAttribute('aria-label', t('removeMap'));
+      rm.onclick = (e) => { e.stopPropagation(); removeMap(m); };
+      item.appendChild(rm);
       els.maplist.appendChild(item);
     });
     if (selectedMap) selectMap(selectedMap);
     updateRenderButtons();
+  }
+
+  function resetMapSelection() {
+    selectedMap = null;
+    currentInfoEntry = null;
+    els.mapInfo.hidden = true;
+    els.renderState.textContent = t('renderStateIdle');
+  }
+
+  function removeMap(entry) {
+    if (renderBusy || batchBusy) return;
+    const idx = maps.indexOf(entry);
+    if (idx === -1) return;
+    maps.splice(idx, 1);
+    if (selectedMap === entry) selectedMap = maps[Math.min(idx, maps.length - 1)] || null;
+    if (!maps.length) resetMapSelection();
+    renderMapList();
+    els.infoMaps.textContent = t('mapsPrefix') + maps.length;
+    setStatus('ok', t('mapRemoved'));
+  }
+
+  function clearMaps() {
+    if (renderBusy || batchBusy || !maps.length) return;
+    maps.length = 0;
+    resetMapSelection();
+    renderMapList();
+    els.infoMaps.textContent = t('mapsPrefix') + 0;
+    setStatus('ok', t('mapsCleared'));
   }
 
   function renderMapInfo(entry, info) {
@@ -549,6 +811,49 @@
     els.progressWrap.classList.add('show');
   }
 
+  // ---- render log ----
+  const MAX_LOG_LINES = 200;
+  let logEntries = [];
+
+  function appendLog(message, level) {
+    const text = String(message == null ? '' : message).trim();
+    if (!text) return;
+    logEntries.push({
+      at: Date.now(),
+      level: level || 'info',
+      text: text.length > 1000 ? text.slice(0, 1000) + '…' : text,
+    });
+    if (logEntries.length > MAX_LOG_LINES) logEntries.splice(0, logEntries.length - MAX_LOG_LINES);
+    renderLog();
+  }
+
+  function clearLog() {
+    logEntries = [];
+    renderLog();
+  }
+
+  function renderLog() {
+    els.renderLog.hidden = logEntries.length === 0;
+    els.logCount.textContent = logEntries.length ? String(logEntries.length) : '';
+    const atBottom = els.logBody.scrollHeight - els.logBody.scrollTop - els.logBody.clientHeight < 24;
+    els.logBody.innerHTML = '';
+    for (const entry of logEntries) {
+      const d = new Date(entry.at);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      const ss = String(d.getSeconds()).padStart(2, '0');
+      const line = document.createElement('div');
+      line.className = 'log-line ' + entry.level;
+      line.textContent = '[' + hh + ':' + mm + ':' + ss + '] ' + entry.text;
+      els.logBody.appendChild(line);
+    }
+    if (atBottom) els.logBody.scrollTop = els.logBody.scrollHeight;
+  }
+
+  function openLog() {
+    if (!els.renderLog.hidden) els.renderLog.open = true;
+  }
+
   function showPreview(url, meta) {
     els.previewImg.onload = () => {
       els.placeholder.style.display = 'none';
@@ -558,28 +863,56 @@
     if (meta) els.previewMeta.textContent = meta;
   }
 
-  function addRenderHistory(url, downloadUrl, name) {
+  function addRenderHistory(url, downloadUrl, name, blob, values) {
     if (!url) return;
     const existing = renderHistory.find((h) => h.url === url);
     if (existing) {
       existing.name = name || existing.name;
+      if (values) existing.values = values;
       renderHistoryList();
       return;
     }
-    renderHistory.unshift({ id: ++historySeq, url, downloadUrl: downloadUrl || url, name: name || '' });
+    const item = { id: ++historySeq, dbId: null, url, downloadUrl: downloadUrl || url, name: name || '', values: values || null };
+    renderHistory.unshift(item);
     while (renderHistory.length > MAX_HISTORY) {
       const removed = renderHistory.pop();
-      if (removed && removed.url.startsWith('blob:') && (!currentImage || currentImage.url !== removed.url)) {
+      if (!removed) continue;
+      if (removed.dbId != null) void deleteRenderRecord(removed.dbId);
+      if (removed.url.startsWith('blob:') && (!currentImage || currentImage.url !== removed.url)) {
         URL.revokeObjectURL(removed.url);
       }
     }
     renderHistoryList();
+    void persistRenderHistoryItem(item, blob, downloadUrl);
+  }
+
+  async function persistRenderHistoryItem(item, blob, sourceUrl) {
+    try {
+      let imageBlob = blob;
+      if (!imageBlob && sourceUrl) {
+        const resp = await fetch(sourceUrl);
+        if (resp.ok) imageBlob = await resp.blob();
+      }
+      if (!imageBlob || !renderHistory.includes(item)) return;
+      if (!item.url.startsWith('blob:')) {
+        const oldUrl = item.url;
+        const newUrl = URL.createObjectURL(imageBlob);
+        item.url = newUrl;
+        item.downloadUrl = newUrl;
+        if (currentImage && currentImage.url === oldUrl) {
+          currentImage = { ...currentImage, url: newUrl, downloadUrl: newUrl };
+        }
+        renderHistoryList();
+      }
+      item.dbId = await saveRenderRecord(item.name, imageBlob, item.values);
+    } catch (e) { /* persistence is best-effort */ }
   }
 
   function removeHistoryItem(id) {
     const idx = renderHistory.findIndex((h) => h.id === id);
     if (idx === -1) return;
     const [item] = renderHistory.splice(idx, 1);
+    if (item.dbId != null) void deleteRenderRecord(item.dbId);
     if (item.url.startsWith('blob:') && (!currentImage || currentImage.url !== item.url)) {
       URL.revokeObjectURL(item.url);
     }
@@ -604,9 +937,12 @@
     }
     els.renderHistory.hidden = false;
     for (const item of renderHistory) {
+      const wrap = document.createElement('div');
+      wrap.className = 'rh-item' + (currentImage && currentImage.url === item.url ? ' active' : '');
+      wrap.title = item.name;
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'rh-item' + (currentImage && currentImage.url === item.url ? ' active' : '');
+      btn.className = 'rh-pick';
       btn.title = item.name;
       const img = document.createElement('img');
       img.src = item.url;
@@ -619,8 +955,54 @@
       btn.appendChild(img);
       btn.appendChild(name);
       btn.onclick = () => selectHistoryItem(item);
-      els.renderHistoryList.appendChild(btn);
+      const actions = document.createElement('div');
+      actions.className = 'rh-actions';
+      const reuse = document.createElement('button');
+      reuse.type = 'button';
+      reuse.className = 'rh-act';
+      reuse.textContent = t('historyReuse');
+      reuse.title = t('historyReuseTitle');
+      reuse.disabled = !item.values;
+      reuse.onclick = (e) => { e.stopPropagation(); reuseHistoryParams(item); };
+      actions.appendChild(reuse);
+      wrap.appendChild(btn);
+      wrap.appendChild(actions);
+      els.renderHistoryList.appendChild(wrap);
     }
+  }
+
+  function reuseHistoryParams(item) {
+    if (!item.values) { setStatus('err', t('historyNoParams')); return; }
+    if (renderBusy || batchBusy) return;
+    applyPresetValues(item.values);
+    const base = item.name.replace(/\.(png|jpe?g)$/i, '').toLowerCase();
+    const match = maps.find((m) => m.name.replace(/\.(map|yrm|mpr)$/i, '').toLowerCase() === base);
+    if (!match) { setStatus('err', t('historyNoMap')); return; }
+    selectedMap = match;
+    renderMapList();
+    render();
+  }
+
+  async function clearRenderHistory() {
+    if (!renderHistory.length) return;
+    if (!window.confirm(t('historyClearConfirm'))) return;
+    for (const item of renderHistory) {
+      if (item.url.startsWith('blob:') && (!currentImage || currentImage.url !== item.url)) {
+        URL.revokeObjectURL(item.url);
+      }
+    }
+    renderHistory.length = 0;
+    renderHistoryList();
+    setStatus('ok', t('historyCleared'));
+    try {
+      const db = await openGameDb();
+      await new Promise((resolve) => {
+        const tx = db.transaction(RENDER_STORE, 'readwrite');
+        tx.objectStore(RENDER_STORE).clear();
+        tx.oncomplete = resolve;
+        tx.onerror = resolve;
+      });
+    } catch (e) { /* history is best-effort */ }
   }
 
   function openLightbox(url, name) {
@@ -732,6 +1114,7 @@
   async function renderBrowser() {
     if (renderBusy) return;
     lastRenderResult = { ok: false };
+    cancelRequested = false;
     if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
     if (!selectedMap.file) { setStatus('err', t('browserNoMapFile')); return; }
     if (!gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
@@ -742,6 +1125,7 @@
     }
 
     renderBusy = true;
+    const renderValues = currentPresetValues();
     els.renderBtn.disabled = true;
     updateRenderButtons();
     renderStart = Date.now();
@@ -753,7 +1137,13 @@
     let fallback = false;
     let startedRendering = false;
     try {
-      if (!br) br = BR_CLIENT.create();
+      if (!br) {
+        br = BR_CLIENT.create();
+        br.onLog = (level, message) => {
+          appendLog(message, level >= 5 ? 'fatal' : level >= 4 ? 'error' : 'warn');
+          if (level >= 4) openLog();
+        };
+      }
       setProgress(1, t('workerStarting'));
       const caps = await br.start();
       if (!caps.fileReaderSync || !caps.offscreen) {
@@ -771,6 +1161,8 @@
         format: els.format.value,
         engine: els.engine.value,
         sizeMode: els.sizeMode.value,
+        previewWidth: Number(els.previewWidth.value) || 0,
+        jpegQuality: Number(els.jpegQuality.value) || 95,
         markStartPos: els.markStartPos.checked,
         markOre: els.markOre.checked,
       }, (pct, phase) => {
@@ -781,7 +1173,7 @@
       blobUrl = URL.createObjectURL(res.blob);
       currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
       showPreview(blobUrl, res.name);
-      addRenderHistory(blobUrl, blobUrl, res.name);
+      addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues);
       els.downloadBtn.disabled = false;
       els.downloadBtn.dataset.url = blobUrl;
       els.downloadBtn.dataset.name = res.name;
@@ -796,7 +1188,11 @@
     } catch (e) {
       lastRenderResult = { ok: false, error: e };
       const code = e && e.code;
-      if (code === 'UNSUPPORTED') {
+      if (cancelRequested || (e && e.name === 'AbortError')) {
+        lastRenderResult = { ok: false, cancelled: true };
+        els.renderState.textContent = t('cancelled');
+        setStatus('ok', t('cancelled'));
+      } else if (code === 'UNSUPPORTED') {
         fallback = true;
         setRenderMode('server');
         setStatus('err', t('browserUnsupported'));
@@ -816,6 +1212,8 @@
         else if (code === 'ENCODE_UNSUPPORTED') setStatus('err', t('browserEncodeUnsupported'));
         else if (code === 'ASSETS_MISSING') setStatus('err', t('browserAssetsMissing'));
         else setStatus('err', t('browserRenderFailed') + ': ' + (e && e.message || e));
+        appendLog(e && e.message ? e.message : String(e), 'error');
+        openLog();
         els.renderState.textContent = t('renderFailed');
         if (!code) {
           if (br) { try { br.terminate(); } catch (err) { /* ignore */ } }
@@ -825,6 +1223,7 @@
       }
     } finally {
       renderBusy = false;
+      cancelRequested = false;
       updateRenderButtons();
     }
     if (fallback) return renderServer();
@@ -833,9 +1232,13 @@
   async function renderServer() {
     if (renderBusy) return;
     lastRenderResult = { ok: false };
+    cancelRequested = false;
+    currentJobId = null;
     if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
+    abortController = new AbortController();
 
     renderBusy = true;
+    const renderValues = currentPresetValues();
     els.renderBtn.disabled = true;
     updateRenderButtons();
     renderStart = Date.now();
@@ -851,7 +1254,9 @@
         format: els.format.value,
         engine: els.engine.value,
         sizeMode: els.sizeMode.value,
+        previewWidth: Number(els.previewWidth.value) || 0,
         pngCompression: els.pngCompression.value,
+        jpegQuality: Number(els.jpegQuality.value) || 95,
         markStartPos: els.markStartPos.checked,
         markOre: els.markOre.checked,
       };
@@ -861,8 +1266,16 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal: abortController.signal,
       });
-      if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+      if (!resp.ok || !resp.body) {
+        let msg = 'HTTP ' + resp.status;
+        try {
+          const data = await resp.json();
+          if (data && data.error) msg = data.error;
+        } catch (e) { /* keep the HTTP status text */ }
+        throw new Error(msg);
+      }
 
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
@@ -879,20 +1292,33 @@
           if (!line) continue;
           let evt;
           try { evt = JSON.parse(line); } catch { continue; }
-          if (evt.type === 'start') {
+          if (evt.type === 'job') {
+            currentJobId = evt.id;
+          } else if (evt.type === 'queued') {
+            setProgress(0, tf('queuedPos', { pos: evt.position }));
+            els.renderState.textContent = tf('queuedPos', { pos: evt.position });
+          } else if (evt.type === 'start') {
             els.engineTag.textContent = t('enginePrefix') + argvShort(evt.args);
             lastStartArgs = evt.args;
           } else if (evt.type === 'progress') {
             lastProgress = evt.percent;
             setProgress(evt.percent, phaseLabel(evt.phase));
           } else if (evt.type === 'log') {
-            if (evt.level === 'fatal') setStatus('err', t('renderError'));
+            appendLog(evt.message, evt.level === 'fatal' ? 'fatal' : 'warn');
+            if (evt.level === 'fatal') {
+              openLog();
+              setStatus('err', t('renderError'));
+            }
           } else if (evt.type === 'done') {
-            if (evt.ok) {
+            if (evt.cancelled) {
+              els.renderState.textContent = t('cancelled');
+              setStatus('ok', t('cancelled'));
+              lastRenderResult = { ok: false, cancelled: true };
+            } else if (evt.ok) {
               setProgress(100, t('complete'));
               currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
               showPreview(evt.url, evt.name);
-              addRenderHistory(evt.url, evt.downloadUrl, evt.name);
+              addRenderHistory(evt.url, evt.downloadUrl, evt.name, null, renderValues);
               els.downloadBtn.disabled = false;
               els.downloadBtn.dataset.url = evt.downloadUrl;
               els.downloadBtn.dataset.name = evt.name;
@@ -905,20 +1331,35 @@
               lastRenderResult = { ok: true, downloadUrl: evt.downloadUrl, name: evt.name };
             } else {
               setProgress(lastProgress, t('failCode') + evt.code + ')');
+              appendLog((evt.message || t('renderFailed')) + (evt.code != null ? ' (code ' + evt.code + ')' : ''), 'error');
+              openLog();
               els.renderState.textContent = t('renderFailed');
               setStatus('err', t('renderFailed'));
             }
           } else if (evt.type === 'error') {
+            appendLog(evt.message || t('reqFailed'), 'error');
+            openLog();
             els.renderState.textContent = t('errorPrefix') + (evt.message || '');
             setStatus('err', t('reqFailed'));
           }
         }
       }
     } catch (e) {
-      els.renderState.textContent = t('reqFailed');
-      setStatus('err', t('reqFailedPrefix') + (e && e.message || e));
+      if (cancelRequested || (e && e.name === 'AbortError')) {
+        els.renderState.textContent = t('cancelled');
+        setStatus('ok', t('cancelled'));
+        lastRenderResult = { ok: false, cancelled: true };
+      } else {
+        appendLog(e && e.message ? e.message : String(e), 'error');
+        openLog();
+        els.renderState.textContent = t('reqFailed');
+        setStatus('err', t('reqFailedPrefix') + (e && e.message || e));
+      }
     } finally {
       renderBusy = false;
+      cancelRequested = false;
+      currentJobId = null;
+      abortController = null;
       updateRenderButtons();
     }
   }
@@ -931,6 +1372,7 @@
     if (maps.length > MAX_BATCH) { setStatus('err', tf('batchTooMany', { n: MAX_BATCH })); return; }
     if (renderMode === 'browser' && !gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
     batchBusy = true;
+    batchCancelled = false;
     zipBlob = null;
     updateRenderButtons();
     const entries = maps.slice();
@@ -938,6 +1380,7 @@
     let failed = 0;
     try {
       for (let i = 0; i < entries.length; i++) {
+        if (batchCancelled) break;
         const entry = entries[i];
         selectedMap = entry;
         renderMapList();
@@ -960,9 +1403,11 @@
           failed++;
         }
         await new Promise((r) => setTimeout(r, 0));
+        if (batchCancelled) break;
       }
       if (zipped.length) zipBlob = await window.createZipBlob(zipped);
-      setStatus(zipped.length ? 'ok' : 'err', failed
+      if (batchCancelled) setStatus('ok', t('batchCancelled'));
+      else setStatus(zipped.length ? 'ok' : 'err', failed
         ? tf('batchDoneFail', { ok: zipped.length, fail: failed })
         : tf('batchDone', { ok: zipped.length }));
     } catch (e) {
@@ -1005,19 +1450,95 @@
 
   const GAME_DB = 'cncmaps_web';
   const GAME_STORE = 'handles';
+  const RENDER_STORE = 'renders';
   const GAME_HANDLE_KEY = 'gameDir';
+  const MAX_PERSIST_BYTES = 32 * 1024 * 1024;
   let savedDirHandle = null;
 
   function openGameDb() {
     return new Promise((resolve, reject) => {
       if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB unavailable')); return; }
-      const req = indexedDB.open(GAME_DB, 1);
+      const req = indexedDB.open(GAME_DB, 2);
       req.onupgradeneeded = () => {
-        if (!req.result.objectStoreNames.contains(GAME_STORE)) req.result.createObjectStore(GAME_STORE);
+        const db = req.result;
+        if (!db.objectStoreNames.contains(GAME_STORE)) db.createObjectStore(GAME_STORE);
+        if (!db.objectStoreNames.contains(RENDER_STORE)) db.createObjectStore(RENDER_STORE, { keyPath: 'id', autoIncrement: true });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
+  }
+
+  async function saveRenderRecord(name, blob, values) {
+    if (!blob || blob.size > MAX_PERSIST_BYTES) return null;
+    try {
+      const db = await openGameDb();
+      const id = await new Promise((resolve, reject) => {
+        const tx = db.transaction(RENDER_STORE, 'readwrite');
+        const rq = tx.objectStore(RENDER_STORE).add({ name, blob, values: values || null, createdAt: Date.now() });
+        rq.onsuccess = () => resolve(rq.result);
+        rq.onerror = () => reject(rq.error);
+      });
+      await trimRenderRecords(db);
+      return id;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function trimRenderRecords(db) {
+    try {
+      const records = await new Promise((resolve, reject) => {
+        const tx = db.transaction(RENDER_STORE, 'readonly');
+        const rq = tx.objectStore(RENDER_STORE).getAll();
+        rq.onsuccess = () => resolve(rq.result || []);
+        rq.onerror = () => reject(rq.error);
+      });
+      records.sort((a, b) => b.createdAt - a.createdAt);
+      const extra = records.slice(MAX_HISTORY);
+      if (!extra.length) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction(RENDER_STORE, 'readwrite');
+        const store = tx.objectStore(RENDER_STORE);
+        for (const record of extra) store.delete(record.id);
+        tx.oncomplete = resolve;
+        tx.onerror = resolve;
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  async function deleteRenderRecord(id) {
+    if (id == null) return;
+    try {
+      const db = await openGameDb();
+      const tx = db.transaction(RENDER_STORE, 'readwrite');
+      tx.objectStore(RENDER_STORE).delete(id);
+    } catch (e) { /* ignore */ }
+  }
+
+  async function restoreRenderHistory() {
+    try {
+      const db = await openGameDb();
+      const records = await new Promise((resolve, reject) => {
+        const tx = db.transaction(RENDER_STORE, 'readonly');
+        const rq = tx.objectStore(RENDER_STORE).getAll();
+        rq.onsuccess = () => resolve(rq.result || []);
+        rq.onerror = () => reject(rq.error);
+      });
+      records.sort((a, b) => a.createdAt - b.createdAt);
+      for (const record of records.slice(-MAX_HISTORY)) {
+        const url = URL.createObjectURL(record.blob);
+        renderHistory.unshift({
+          id: ++historySeq,
+          dbId: record.id,
+          url,
+          downloadUrl: url,
+          name: record.name || '',
+          values: record.values || null,
+        });
+      }
+      renderHistoryList();
+    } catch (e) { /* ignore missing history */ }
   }
 
   async function getSavedGameDir() {
@@ -1184,16 +1705,34 @@
   els.renderBtn.onclick = render;
   els.renderAllBtn.onclick = () => { void renderAll(); };
   els.zipBtn.onclick = downloadZip;
+  els.cancelBtn.onclick = cancelRender;
+  els.clearMapsBtn.onclick = clearMaps;
+  els.clearHistoryBtn.onclick = () => { void clearRenderHistory(); };
+  els.logClearBtn.onclick = clearLog;
   els.pngCompression.addEventListener('input', () => {
     els.pngCompressionVal.textContent = els.pngCompression.value;
   });
-  els.format.addEventListener('change', () => {
-    els.pngCompressionField.style.opacity = els.format.value === 'png' ? '1' : '.35';
+  els.jpegQuality.addEventListener('input', () => {
+    els.jpegQualityVal.textContent = els.jpegQuality.value;
   });
+  els.format.addEventListener('change', applyFormatFields);
   els.engine.addEventListener('change', setEngineTag);
+  els.presetSelect.addEventListener('change', () => {
+    if (els.presetSelect.value === '') return;
+    const preset = loadPresets()[Number(els.presetSelect.value)];
+    if (preset) applyPresetValues(preset.values);
+  });
+  els.presetSaveBtn.onclick = savePreset;
+  els.presetDeleteBtn.onclick = deletePreset;
 
+  els.appVersion.textContent = 'v' + APP_VERSION;
   setStatus('ok', t('statusReady'));
   applyLang();
+  applyFormatFields();
+  populatePresets();
   updateRenderButtons();
+  void refreshServerHealth();
+  setInterval(() => { void refreshServerHealth(); }, 15000);
+  void restoreRenderHistory();
   void restoreGameDir();
 })();

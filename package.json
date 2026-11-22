@@ -1,6 +1,6 @@
 {
   "name": "cncmaps-ts",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TypeScript port of CNCMaps — C&C Red Alert 2 / Tiberian Sun map renderer",
   "type": "module",
   "main": "dist/index.js",

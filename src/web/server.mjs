@@ -174,6 +174,59 @@ function buildArgs(p) {
   };
 }
 
+const MAX_RENDER_JOBS = Math.max(1, Number(process.env.CNCMAPS_MAX_RENDER_JOBS || 2));
+let activeRenderJobs = 0;
+const renderQueue = [];
+const renderJobs = new Map();
+
+function sendQueuePositions() {
+  for (let i = 0; i < renderQueue.length; i++) {
+    const queued = renderQueue[i];
+    if (!queued.finished && !queued.clientGone) queued.wnd({ type: 'queued', position: i + 1 });
+  }
+}
+
+function pumpRenderQueue() {
+  while (activeRenderJobs < MAX_RENDER_JOBS && renderQueue.length) {
+    const next = renderQueue.shift();
+    if (next.finished || next.cancelled) continue;
+    activeRenderJobs++;
+    next.started = true;
+    try {
+      next.onStart();
+    } catch (e) {
+      finishRenderJob(next, { type: 'error', message: String(e && e.message || e) });
+    }
+  }
+  sendQueuePositions();
+}
+
+function finishRenderJob(job, event) {
+  if (job.finished) return;
+  job.finished = true;
+  if (job.started) activeRenderJobs = Math.max(0, activeRenderJobs - 1);
+  const idx = renderQueue.indexOf(job);
+  if (idx !== -1) renderQueue.splice(idx, 1);
+  renderJobs.delete(job.id);
+  if (!job.clientGone) {
+    try {
+      if (event) job.wnd(event);
+      job.res.end();
+    } catch { /* client already gone */ }
+  }
+  pumpRenderQueue();
+}
+
+function cancelRenderJob(job) {
+  if (!job || job.finished) return;
+  job.cancelled = true;
+  if (job.child) {
+    try { job.child.kill(); } catch { /* ignore */ }
+  } else {
+    finishRenderJob(job, { type: 'done', ok: false, cancelled: true });
+  }
+}
+
 function streamRender(req, res, params) {
   if (!params.uploadToken) {
     return sendJson(res, 400, { error: 'Missing map uploadToken' });
@@ -191,49 +244,90 @@ function streamRender(req, res, params) {
     'X-Accel-Buffering': 'no',
   });
 
-  const wnd = (obj) => res.write(JSON.stringify(obj) + '\n');
-  wnd({ type: 'start', url: job.url, name: job.name, args: job.args.slice(1) });
+  const record = {
+    id: job.token,
+    res,
+    started: false,
+    finished: false,
+    cancelled: false,
+    clientGone: false,
+    child: null,
+    onStart: start,
+    wnd(obj) {
+      if (this.clientGone) return;
+      try { res.write(JSON.stringify(obj) + '\n'); } catch { /* ignore */ }
+    },
+  };
+  renderJobs.set(record.id, record);
+  record.wnd({ type: 'job', id: record.id });
 
-  const child = spawn(process.execPath, job.args, { cwd: ROOT });
-  let outBuf = '';
+  req.on('close', () => {
+    if (record.finished) return;
+    record.clientGone = true;
+    cancelRenderJob(record);
+  });
 
-  child.stdout.on('data', (d) => {
-    outBuf += d.toString('utf8');
-    let nl;
-    while ((nl = outBuf.indexOf('\n')) !== -1) {
-      const line = outBuf.slice(0, nl).trim();
-      outBuf = outBuf.slice(nl + 1);
-      const m = /^progress:(\d+):(.+)$/.exec(line);
-      if (m) wnd({ type: 'progress', percent: Number(m[1]), phase: m[2] });
-      else if (/^.*\[INFO\] Saved /.test(line)) wnd({ type: 'saved' });
-      else if (/\[FATAL\]/.test(line)) wnd({ type: 'log', level: 'fatal', message: line.replace(/^\d+\s*/, '') });
+  renderQueue.push(record);
+  sendQueuePositions();
+  pumpRenderQueue();
+
+  function start() {
+    if (record.cancelled) {
+      finishRenderJob(record, { type: 'done', ok: false, cancelled: true });
+      return;
     }
-  });
-  child.stderr.on('data', (d) => {
-    const s = d.toString('utf8');
-    if (/\[FATAL\]/.test(s)) wnd({ type: 'log', level: 'fatal', message: s.trim() });
-  });
-
-  child.on('error', (e) => {
-    wnd({ type: 'error', message: String(e.message || e) });
-    res.end();
-  });
-  child.on('close', (code) => {
-    const ok = code === 0 && fs.existsSync(job.outFile);
-    if (ok) {
-      // Load into memory, then remove the transient file so nothing persists
-      // to a local directory.
-      cachePut(job.token, { buffer: fs.readFileSync(job.outFile), name: job.name, mime: job.mime, at: Date.now() });
-      try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
-      wnd({ type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name });
-    } else {
-      try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
-      wnd({ type: 'done', ok: false, code, message: 'Render exited with code ' + code });
-    }
+    record.wnd({ type: 'start', url: job.url, name: job.name, args: job.args.slice(1) });
+    let child;
     try {
-      res.end();
-    } catch { /* already closed */ }
-  });
+      child = spawn(process.execPath, job.args, { cwd: ROOT });
+    } catch (e) {
+      finishRenderJob(record, { type: 'error', message: String(e && e.message || e) });
+      return;
+    }
+    record.child = child;
+    let outBuf = '';
+
+    child.stdout.on('data', (d) => {
+      outBuf += d.toString('utf8');
+      let nl;
+      while ((nl = outBuf.indexOf('\n')) !== -1) {
+        const line = outBuf.slice(0, nl).trim();
+        outBuf = outBuf.slice(nl + 1);
+        const m = /^progress:(\d+):(.+)$/.exec(line);
+        if (m) record.wnd({ type: 'progress', percent: Number(m[1]), phase: m[2] });
+        else if (/^.*\[INFO\] Saved /.test(line)) record.wnd({ type: 'saved' });
+        else if (/\[FATAL\]/.test(line)) record.wnd({ type: 'log', level: 'fatal', message: line.replace(/^\d+\s*/, '') });
+      }
+    });
+    child.stderr.on('data', (d) => {
+      const s = d.toString('utf8');
+      if (/\[FATAL\]/.test(s)) record.wnd({ type: 'log', level: 'fatal', message: s.trim() });
+    });
+
+    child.on('error', (e) => {
+      record.child = null;
+      finishRenderJob(record, { type: 'error', message: String(e.message || e) });
+    });
+    child.on('close', (code) => {
+      record.child = null;
+      if (record.cancelled) {
+        try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
+        finishRenderJob(record, { type: 'done', ok: false, cancelled: true });
+        return;
+      }
+      const ok = code === 0 && fs.existsSync(job.outFile);
+      if (ok) {
+        // Load into memory, then remove the transient file so nothing persists
+        // to a local directory.
+        cachePut(job.token, { buffer: fs.readFileSync(job.outFile), name: job.name, mime: job.mime, at: Date.now() });
+        try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
+        finishRenderJob(record, { type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name });
+      } else {
+        try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
+        finishRenderJob(record, { type: 'done', ok: false, code, message: 'Render exited with code ' + code });
+      }
+    });
+  }
 }
 
 function serveStatic(req, res, urlPath) {
@@ -261,7 +355,26 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, root: ROOT });
+      let validDirs = 0;
+      let mixFiles = 0;
+      for (const dir of GAME_DIRS) {
+        try {
+          const mixes = fs.readdirSync(dir).filter((f) => /\.(mix|mmx|yro)$/i.test(f)).length;
+          if (mixes > 0) {
+            validDirs++;
+            mixFiles += mixes;
+          }
+        } catch { /* ignore unreadable dirs */ }
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        gameDirs: GAME_DIRS.length,
+        gameDirsValid: validDirs,
+        mixFiles,
+        maxRenderJobs: MAX_RENDER_JOBS,
+        activeRenderJobs,
+        queuedRenders: renderQueue.length,
+      });
     }
     if (req.method === 'POST' && url.pathname === '/api/upload') {
       const fn = (req.headers['x-filename'] && decodeURIComponent(req.headers['x-filename'])) || 'map.map';
@@ -278,6 +391,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/render') {
       const body = await readBody(req);
       return streamRender(req, res, body);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/render/cancel') {
+      const body = await readBody(req);
+      const job = renderJobs.get(String(body.id || ''));
+      if (job) cancelRenderJob(job);
+      return sendJson(res, 200, { ok: !!job });
     }
     if (req.method === 'GET' && (url.pathname.startsWith('/image/') || url.pathname.startsWith('/download/'))) {
       const token = decodeURIComponent(url.pathname.split('/').pop() || '');

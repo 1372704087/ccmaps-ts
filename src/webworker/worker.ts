@@ -17,6 +17,7 @@ interface RenderOptions {
   sizeMode?: string;
   markStartPos?: boolean;
   markOre?: boolean;
+  previewWidth?: number;
   jpegQuality?: number;
   maxPixels?: number;
 }
@@ -49,7 +50,7 @@ function makeSettings(settings: RenderSettings, options: RenderOptions, mapPath:
   settings.OutputFile = '';
   settings.OutputDir = '';
   settings.MetadataOutFile = '';
-  settings.PreviewWidth = 0;
+  settings.PreviewWidth = Math.max(0, Number(options.previewWidth) || 0);
   settings.BandHeight = -1;
   settings.ReportProgress = true;
   settings.MaxSurfacePixels = options.maxPixels ?? 0;
