@@ -31,7 +31,7 @@
     serverHealth: $('serverHealth'), appVersion: $('appVersion'),
     themeBtn: $('themeBtn'), themeMenu: $('themeMenu'), toastStack: $('toastStack'),
     markStartPos: $('markStartPos'), markOre: $('markOre'),
-    renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), cancelBtn: $('cancelBtn'), renderState: $('renderState'),
+    renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), cancelBtn: $('cancelBtn'),
     progressFill: $('progressFill'),
     progressPct: $('progressPct'), progressPhase: $('progressPhase'),
     renderLog: $('renderLog'), logBody: $('logBody'), logCount: $('logCount'), logClearBtn: $('logClearBtn'),
@@ -66,6 +66,8 @@
   const renderHistory = [];
   let historySeq = 0;
   const MAX_HISTORY = 12;
+  const THUMB_W = 240;
+  const THUMB_H = 120;
   let mapInfoCache = new Map();
   const mapStatsCache = new WeakMap();
   let currentMapInfo = null;
@@ -102,6 +104,7 @@
       'themeSoviet': '铁幕红',
       'themeFrost': '冰霜白',
       'themeSunset': '落日橙',
+      'themeStarry': '星空',
       'themeGroupDark': '深色系',
       'themeGroupLight': '浅色系',
       'themeGroupSpecial': '无障碍',
@@ -209,7 +212,6 @@
       'readingGameDir': '读取游戏目录…',
       'gameDirPermission': '没有游戏目录读取权限',
       'gameDirRestoreFail': '无法恢复上次的游戏目录，请重新选择',
-      'renderStateIdle': '尚未渲染',
       'mapFirst': '请先选择地图',
       'downloadOriginal': '下载原图',
       'phaseWait': '等待开始',
@@ -225,7 +227,6 @@
       'closeLabel': '关闭',
       'zoomIn': '放大', 'zoomOut': '缩小', 'zoomFit': '适应窗口', 'zoom100': '实际大小',
       'enginePrefix': '引擎 · ',
-      'selPrefix': '已选择：',
       'selMap': '已选择地图',
       'extErr': '仅支持 .map / .yrm / .mpr 文件',
       'uploading': '上传中…',
@@ -238,7 +239,6 @@
       'phaseObjects': '绘制建筑与单位…', 'phaseEncoding': '编码输出…',
       'phaseDrawing': '绘制中…',
       'phaseSubmit': '提交任务…',
-      'renderingPrefix': '渲染中：',
       'rendering': '渲染中…',
       'complete': '完成',
       'failCode': '失败 (code ',
@@ -283,6 +283,7 @@
       'themeSoviet': 'Iron Curtain',
       'themeFrost': 'Frost Light',
       'themeSunset': 'Sunset Ember',
+      'themeStarry': 'Starry Night',
       'themeGroupDark': 'Dark',
       'themeGroupLight': 'Light',
       'themeGroupSpecial': 'Accessibility',
@@ -390,7 +391,6 @@
       'readingGameDir': 'Reading game folder…',
       'gameDirPermission': 'No permission to read the game folder',
       'gameDirRestoreFail': 'Could not restore the previous game folder; select it again',
-      'renderStateIdle': 'Not rendered yet',
       'mapFirst': 'Select a map first',
       'downloadOriginal': 'Download original',
       'phaseWait': 'Waiting to start',
@@ -406,7 +406,6 @@
       'closeLabel': 'Close',
       'zoomIn': 'Zoom In', 'zoomOut': 'Zoom Out', 'zoomFit': 'Fit Window', 'zoom100': '100%',
       'enginePrefix': 'Engine · ',
-      'selPrefix': 'Selected: ',
       'selMap': 'Map selected',
       'extErr': 'Only .map / .yrm / .mpr files are supported',
       'uploading': 'Uploading…',
@@ -420,7 +419,6 @@
       'phaseObjects': 'Drawing buildings & units…', 'phaseEncoding': 'Encoding output…',
       'phaseDrawing': 'Drawing…',
       'phaseSubmit': 'Submitting…',
-      'renderingPrefix': 'Rendering: ',
       'rendering': 'Rendering…',
       'complete': 'Done',
       'failCode': 'Failed (code ',
@@ -485,18 +483,10 @@
     if (assetInfo)
       els.assetState.textContent = tf('assetLocalReady', assetInfo);
     if (currentInfoEntry) renderMapInfo(currentInfoEntry, currentMapInfo);
-    if (renderStateSupportsT(els.renderState.textContent))
-      els.renderState.textContent = t(renderStateSupportsT(els.renderState.textContent));
     applyModeUI();
     populatePresets(els.presetSelect.value === '' ? null : Number(els.presetSelect.value));
     renderHistoryList();
     renderBatchQueue();
-  }
-  // map current dynamic render-state text back to its i18n key (for live switch)
-  function renderStateSupportsT(text) {
-    const keys = ['renderStateIdle', 'renderFailed', 'reqFailed', 'complete', 'renderDone'];
-    for (const k of keys) if (text === I18N.zh[k] || text === I18N.en[k]) return k;
-    return null;
   }
 
   function setLang(lang) {
@@ -519,6 +509,7 @@
     { id: 'cyber', labelKey: 'themeCyber', group: 'dark' },
     { id: 'soviet', labelKey: 'themeSoviet', group: 'dark' },
     { id: 'sunset', labelKey: 'themeSunset', group: 'dark' },
+    { id: 'starry', labelKey: 'themeStarry', group: 'dark' },
     { id: 'light', labelKey: 'themeLight', group: 'light' },
     { id: 'frost', labelKey: 'themeFrost', group: 'light' },
     { id: 'paper', labelKey: 'themePaper', group: 'light' },
@@ -979,7 +970,6 @@
       x.classList.toggle('active', !!m && x.dataset.key === m.key);
     });
     updateRenderButtons();
-    els.renderState.textContent = m ? t('selPrefix') + m.name : t('renderStateIdle');
     setStatus('ok', t('selMap'));
     void loadMapInfo(m);
   }
@@ -1070,7 +1060,6 @@
     currentInfoEntry = null;
     els.mapInfo.hidden = true;
     els.mapAnalysis.hidden = true;
-    els.renderState.textContent = t('renderStateIdle');
   }
 
   function removeMap(entry) {
@@ -1423,8 +1412,9 @@
       renderHistoryList();
       return;
     }
-    const item = { id: ++historySeq, dbId: null, url, downloadUrl: downloadUrl || url, name: name || '', values: values || null, at: Date.now() };
+    const item = { id: ++historySeq, dbId: null, url, downloadUrl: downloadUrl || url, name: name || '', values: values || null, at: Date.now(), thumbUrl: null };
     renderHistory.unshift(item);
+    if (blob) attachHistoryThumb(item, blob);
     while (renderHistory.length > MAX_HISTORY) {
       const removed = renderHistory.pop();
       if (!removed) continue;
@@ -1437,6 +1427,56 @@
     void persistRenderHistoryItem(item, blob, downloadUrl);
   }
 
+  // 历史缩略图：把完整渲染图裁成 240x120 的小图，避免列表滚动时反复解码大图。
+  let thumbQueue = Promise.resolve();
+
+  function makeThumb(blob) {
+    return new Promise((resolve) => {
+      function fromSource(src) {
+        try {
+          const c = document.createElement('canvas');
+          c.width = THUMB_W;
+          c.height = THUMB_H;
+          const g = c.getContext('2d');
+          if (!g || !src.width || !src.height) return resolve(null);
+          const scale = Math.max(THUMB_W / src.width, THUMB_H / src.height);
+          const sw = THUMB_W / scale;
+          const sh = THUMB_H / scale;
+          g.drawImage(src, (src.width - sw) / 2, (src.height - sh) / 2, sw, sh, 0, 0, THUMB_W, THUMB_H);
+          resolve(c.toDataURL('image/jpeg', 0.82));
+        } catch (e) {
+          resolve(null);
+        }
+      }
+      function fromImage() {
+        const url = URL.createObjectURL(blob);
+        const im = new Image();
+        im.onload = () => { URL.revokeObjectURL(url); fromSource(im); };
+        im.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+        im.src = url;
+      }
+      if (window.createImageBitmap) {
+        // 先缩到 480px 宽再裁剪，避免超大渲染图在解码阶段就占满内存。
+        createImageBitmap(blob, { resizeWidth: 480, resizeQuality: 'low' })
+          .then((bmp) => { fromSource(bmp); if (bmp.close) bmp.close(); })
+          .catch(fromImage);
+      } else {
+        fromImage();
+      }
+    });
+  }
+
+  function attachHistoryThumb(item, blob) {
+    thumbQueue = thumbQueue.then(async () => {
+      if (!blob || item.thumbUrl || !renderHistory.includes(item)) return;
+      const thumb = await makeThumb(blob);
+      if (!thumb || !renderHistory.includes(item)) return;
+      item.thumbUrl = thumb;
+      const img = els.renderHistoryList.querySelector('[data-hid="' + item.id + '"] img');
+      if (img) img.src = thumb;
+    }).catch(() => {});
+  }
+
   async function persistRenderHistoryItem(item, blob, sourceUrl) {
     try {
       let imageBlob = blob;
@@ -1445,6 +1485,7 @@
         if (resp.ok) imageBlob = await resp.blob();
       }
       if (!imageBlob || !renderHistory.includes(item)) return;
+      attachHistoryThumb(item, imageBlob);
       if (!item.url.startsWith('blob:')) {
         const oldUrl = item.url;
         const newUrl = URL.createObjectURL(imageBlob);
@@ -1505,15 +1546,17 @@
       const meta = historyMeta(item);
       const wrap = document.createElement('div');
       wrap.className = 'rh-item' + (currentImage && currentImage.url === item.url ? ' active' : '');
+      wrap.dataset.hid = String(item.id);
       wrap.title = item.name + (meta ? ' · ' + meta : '');
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'rh-pick';
       btn.title = wrap.title;
       const img = document.createElement('img');
-      img.src = item.url;
+      if (item.thumbUrl) img.src = item.thumbUrl;
       img.alt = item.name;
       img.loading = 'lazy';
+      img.decoding = 'async';
       img.onerror = () => removeHistoryItem(item.id);
       const name = document.createElement('span');
       name.className = 'rh-name';
@@ -1740,7 +1783,6 @@
     updateRenderButtons();
     renderStart = Date.now();
     setProgress(0, t('phaseSubmit'));
-    els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
     els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
@@ -1810,7 +1852,6 @@
       els.engineTag.textContent = t('enginePrefix') + t(engKey);
       infoRenderEmpty = false;
       els.infoRender.textContent = t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
-      els.renderState.textContent = t('renderDone');
       setStatus('ok', t('complete'));
       renderToast(t('renderDone') + ' · ' + res.name, 'ok');
       lastRenderResult = {
@@ -1826,7 +1867,6 @@
       const code = e && e.code;
       if (cancelRequested || (e && e.name === 'AbortError')) {
         lastRenderResult = { ok: false, cancelled: true };
-        els.renderState.textContent = t('cancelled');
         setStatus('ok', t('cancelled'));
         renderToast(t('cancelled'), 'warn');
       } else if (code === 'UNSUPPORTED') {
@@ -1852,7 +1892,6 @@
         appendLog(e && e.message ? e.message : String(e), 'error');
         openLog();
         renderToast(els.statusText.textContent, 'error');
-        els.renderState.textContent = t('renderFailed');
         if (!code) {
           if (br) { try { br.terminate(); } catch (err) { /* ignore */ } }
           br = null;
@@ -1883,7 +1922,6 @@
     updateRenderButtons();
     renderStart = Date.now();
     setProgress(0, t('phaseSubmit'));
-    els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
     els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
@@ -1950,7 +1988,6 @@
             currentJobId = evt.id;
           } else if (evt.type === 'queued') {
             setProgress(0, tf('queuedPos', { pos: evt.position }));
-            els.renderState.textContent = tf('queuedPos', { pos: evt.position });
           } else if (evt.type === 'start') {
             lastStartEngine = evt.engine || 'auto';
             els.engineTag.textContent = t('enginePrefix') + engineShort(lastStartEngine);
@@ -1966,7 +2003,6 @@
           } else if (evt.type === 'done') {
             sawTerminal = true;
             if (evt.cancelled) {
-              els.renderState.textContent = t('cancelled');
               setStatus('ok', t('cancelled'));
               renderToast(t('cancelled'), 'warn');
               lastRenderResult = { ok: false, cancelled: true };
@@ -1999,7 +2035,6 @@
               infoRenderEmpty = false;
               els.infoRender.textContent = t('recentPrefix') + (evt.name || '') + ' · ' +
                 engineShort(lastStartEngine) + ' · ' + dur;
-              els.renderState.textContent = t('renderDone');
               setStatus('ok', t('complete'));
               renderToast(t('renderDone') + ' · ' + evt.name, 'ok');
               const metaWidth = evt.meta && Number(evt.meta.renderedWidth);
@@ -2021,7 +2056,6 @@
               appendLog(failText, 'error');
               openLog();
               renderToast(failText, 'error');
-              els.renderState.textContent = t('renderFailed');
               setStatus('err', t('renderFailed'));
             }
           } else if (evt.type === 'error') {
@@ -2030,7 +2064,6 @@
             appendLog(evt.message || t('reqFailed'), 'error');
             openLog();
             renderToast(evt.message || t('reqFailed'), 'error');
-            els.renderState.textContent = t('errorPrefix') + (evt.message || '');
             setStatus('err', t('reqFailed'));
           }
         }
@@ -2038,7 +2071,6 @@
       if (!sawTerminal) throw new Error(t('streamEnded'));
     } catch (e) {
       if (cancelRequested || (e && e.name === 'AbortError')) {
-        els.renderState.textContent = t('cancelled');
         setStatus('ok', t('cancelled'));
         renderToast(t('cancelled'), 'warn');
         lastRenderResult = { ok: false, cancelled: true };
@@ -2047,7 +2079,6 @@
         appendLog(e && e.message ? e.message : String(e), 'error');
         openLog();
         renderToast(e && e.message ? e.message : String(e), 'error');
-        els.renderState.textContent = t('reqFailed');
         setStatus('err', t('reqFailedPrefix') + (e && e.message || e));
       }
     } finally {
@@ -2724,9 +2755,10 @@
         req.onerror = () => reject(req.error);
       });
       records.sort((a, b) => a.createdAt - b.createdAt);
+      const restored = [];
       for (const record of records.slice(-MAX_HISTORY)) {
         const url = URL.createObjectURL(record.blob);
-        renderHistory.unshift({
+        const item = {
           id: ++historySeq,
           dbId: record.id,
           url,
@@ -2734,9 +2766,13 @@
           name: record.name || '',
           values: record.values || null,
           at: record.createdAt || Date.now(),
-        });
+          thumbUrl: null,
+        };
+        renderHistory.unshift(item);
+        restored.push({ item, blob: record.blob });
       }
       renderHistoryList();
+      for (const entry of restored) attachHistoryThumb(entry.item, entry.blob);
     } catch (e) { /* ignore missing history */ }
   }
 

@@ -10,7 +10,7 @@
 (function () {
   try {
     var saved = localStorage.getItem('cncmaps_theme');
-    var valid = ['dark', 'light', 'terminal', 'holo', 'paper', 'contrast', 'cyber', 'soviet', 'frost', 'sunset'];
+    var valid = ['dark', 'light', 'terminal', 'holo', 'paper', 'contrast', 'cyber', 'soviet', 'frost', 'sunset', 'starry'];
     document.documentElement.dataset.cncmapsTheme = valid.indexOf(saved) !== -1
       ? saved
       : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
@@ -36,6 +36,7 @@
 <div class="bg-grid" aria-hidden="true"></div>
 <div class="bg-sweep" aria-hidden="true"></div>
 <div class="bg-dust" aria-hidden="true"></div>
+<canvas id="starfield" aria-hidden="true"></canvas>
 <div id="themeVeil" class="theme-veil" aria-hidden="true"></div>
 
 <header class="topbar">
@@ -250,7 +251,6 @@
       <button id="renderAllBtn" class="btn btn-ghost" disabled><span data-i18n="renderAllBtn">全部渲染</span></button>
       <button id="zipBtn" class="btn btn-ghost" disabled><svg class="icon"><use href="#i-download"/></svg><span data-i18n="downloadZip">下载 ZIP</span></button>
       <button id="cancelBtn" class="btn btn-ghost" hidden><span data-i18n="cancelBtn">取消</span></button>
-      <div class="render-state" id="renderState" data-i18n="renderStateIdle" aria-live="polite">尚未渲染</div>
     </div>
 
     <details class="render-log" id="renderLog" hidden>
@@ -332,6 +332,7 @@
 <script src="zip.js"></script>
 <script src="map-info.js"></script>
 <script src="browser-render.js"></script>
+<script src="starfield.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
