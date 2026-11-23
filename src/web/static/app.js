@@ -32,7 +32,7 @@
     themeBtn: $('themeBtn'), themeMenu: $('themeMenu'), toastStack: $('toastStack'),
     markStartPos: $('markStartPos'), markOre: $('markOre'),
     renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), cancelBtn: $('cancelBtn'), renderState: $('renderState'),
-    progressWrap: $('progressWrap'), progressFill: $('progressFill'),
+    progressFill: $('progressFill'),
     progressPct: $('progressPct'), progressPhase: $('progressPhase'),
     renderLog: $('renderLog'), logBody: $('logBody'), logCount: $('logCount'), logClearBtn: $('logClearBtn'),
     previewFrame: $('previewFrame'), placeholder: $('placeholder'), previewImg: $('previewImg'),
@@ -1349,7 +1349,7 @@
     els.progressFill.style.width = pct + '%';
     els.progressPct.textContent = Math.round(pct) + '%';
     els.progressPhase.textContent = phase || '';
-    els.progressWrap.classList.add('show');
+    els.progressFill.classList.toggle('active', renderBusy && pct < 100);
     if (batchCurrent && batchCurrent.status === 'rendering') {
       batchCurrent.percent = pct;
       const row = els.batchQueueList.querySelector('[data-batch-idx="' + batchCurrent.index + '"]');
@@ -1741,7 +1741,6 @@
     renderStart = Date.now();
     setProgress(0, t('phaseSubmit'));
     els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
-    els.progressWrap.classList.add('show');
     els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
@@ -1863,6 +1862,7 @@
     } finally {
       renderBusy = false;
       cancelRequested = false;
+      els.progressFill.classList.remove('active');
       els.previewFrame.classList.remove('busy');
       updateRenderButtons();
     }
@@ -1884,7 +1884,6 @@
     renderStart = Date.now();
     setProgress(0, t('phaseSubmit'));
     els.renderState.textContent = t('renderingPrefix') + selectedMap.name;
-    els.progressWrap.classList.add('show');
     els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
@@ -2056,6 +2055,7 @@
       cancelRequested = false;
       currentJobId = null;
       abortController = null;
+      els.progressFill.classList.remove('active');
       els.previewFrame.classList.remove('busy');
       updateRenderButtons();
     }

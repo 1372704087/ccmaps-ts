@@ -253,14 +253,6 @@
       <div class="render-state" id="renderState" data-i18n="renderStateIdle" aria-live="polite">尚未渲染</div>
     </div>
 
-    <div class="progress-wrap" id="progressWrap">
-      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
-      <div class="progress-meta">
-        <span id="progressPct">0%</span>
-        <span id="progressPhase" data-i18n="phaseWait">等待开始</span>
-      </div>
-    </div>
-
     <details class="render-log" id="renderLog" hidden>
       <summary class="rl-head"><span data-i18n="logTitle">渲染日志</span><span class="rl-count" id="logCount"></span></summary>
       <div class="rl-body" id="logBody"></div>
@@ -294,7 +286,15 @@
 </main>
 
 <footer class="statusbar">
-  <span class="left"><span id="statusDot" class="dot"></span><span id="statusText" data-i18n="statusReady" aria-live="polite">就绪</span></span>
+  <div class="statusbar-fill" id="progressFill"></div>
+  <span class="left">
+    <span id="statusDot" class="dot"></span>
+    <span id="statusText" data-i18n="statusReady" aria-live="polite">就绪</span>
+    <span class="status-progress" id="progressWrap">
+      <span id="progressPct">0%</span>
+      <span id="progressPhase" data-i18n="phaseWait">等待开始</span>
+    </span>
+  </span>
   <span class="credit" id="credit"></span>
   <span class="right">
     <span class="sbinfo" id="appVersion"></span>
