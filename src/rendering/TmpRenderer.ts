@@ -1,12 +1,16 @@
 // Port of CNCMaps.Engine.Rendering.TmpRenderer
 import { Point, Rectangle } from '../shared/Geometry.js';
-import { logger } from '../shared/Log.js';
+import { logger, LogLevel } from '../shared/Log.js';
 import { TmpFile } from '../formats/TmpFile.js';
 import { DrawingSurface } from './DrawingSurface.js';
 import { ModConfigLike, MapTileLike, TouchType } from '../engine/Types.js';
 
 export class TmpRenderer {
   private readonly config: ModConfigLike;
+  // Scratch points: the renderer is used serially, and at 1M tiles two Point
+  // allocations per draw are pure GC pressure.
+  private readonly offset = new Point(0, 0);
+  private readonly center = new Point(0, 0);
 
   constructor(config: ModConfigLike) {
     this.config = config;
@@ -46,22 +50,23 @@ export class TmpRenderer {
     const hBufVal = Math.trunc(tile.Z * this.config.TileHeight / 2);
 
     // calculate tile index -> pixel index
-    const offset = new Point(
-      Math.trunc(tile.Dx * tmp.BlockWidth / 2),
-      Math.trunc((tile.Dy - tile.Z) * tmp.BlockHeight / 2),
-    );
+    const offset = this.offset;
+    offset.X = Math.trunc(tile.Dx * tmp.BlockWidth / 2);
+    offset.Y = Math.trunc((tile.Dy - tile.Z) * tmp.BlockHeight / 2);
 
     // make touched tiles (used for determining image cutoff)
-    const center = new Point(offset.X + Math.trunc(tmp.BlockWidth / 2), offset.Y + Math.trunc(tmp.BlockHeight / 2));
+    const center = this.center;
+    center.X = offset.X + Math.trunc(tmp.BlockWidth / 2);
+    center.Y = offset.Y + Math.trunc(tmp.BlockHeight / 2);
     const centerGridTile = tile.Layer.GetTileScreen(center, true, true);
     if (centerGridTile != null) {
       tile.Layer.GridTouched[centerGridTile.Dx][Math.trunc(centerGridTile.Dy / 2)] |= TouchType.ByNormalData;
       tile.Layer.GridTouchedBy[centerGridTile.Dx][Math.trunc(centerGridTile.Dy / 2)] = tile;
     }
 
-    logger.trace(
-      `Drawing TMP file ${tmp.fileName} (subtile ${tile.SubTile}) at (${offset.X},${offset.Y})`,
-    );
+    if (logger.isEnabled(LogLevel.Trace)) {
+      logger.trace(`Drawing TMP file ${tmp.fileName} (subtile ${tile.SubTile}) at (${offset.X},${offset.Y})`);
+    }
 
     const stride = ds.Stride;
     const data = ds.data;
@@ -149,9 +154,9 @@ export class TmpRenderer {
       for (let bx = extraScreenBounds.Left; bx < extraScreenBounds.Right; bx += Math.trunc(tmp.BlockWidth / 2)) {
         const gridTileNoZ = tile.Layer.GetTileScreen(new Point(bx, by), true, true);
         if (gridTileNoZ != null) {
-          logger.trace(
-            `Tile at (${tile.Dx},${tile.Dy}) has extradata affecting (${gridTileNoZ.Dx},${gridTileNoZ.Dy})`,
-          );
+          if (logger.isEnabled(LogLevel.Trace)) {
+            logger.trace(`Tile at (${tile.Dx},${tile.Dy}) has extradata affecting (${gridTileNoZ.Dx},${gridTileNoZ.Dy})`);
+          }
           tile.Layer.GridTouched[gridTileNoZ.Dx][Math.trunc(gridTileNoZ.Dy / 2)] |= TouchType.ByExtraData;
           tile.Layer.GridTouchedBy[gridTileNoZ.Dx][Math.trunc(gridTileNoZ.Dy / 2)] = tile;
         }

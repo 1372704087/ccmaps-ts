@@ -10,6 +10,7 @@
     renderMode: $('renderMode'), modeHint: $('modeHint'),
     srcLabel: $('srcLabel'), resLabel: $('resLabel'),
     maplist: $('maplist'), clearMapsBtn: $('clearMapsBtn'), mapInfo: $('mapInfo'), mapInfoSummary: $('mapInfoSummary'), mapInfoBody: $('mapInfoBody'),
+    mapAnalysis: $('mapAnalysis'), mapAnalysisSummary: $('mapAnalysisSummary'), mapAnalysisBody: $('mapAnalysisBody'),
     sources: document.querySelector('.panel.sources'),
     gameDirBtn: $('gameDirBtn'), gameDirInput: $('gameDirInput'), assetState: $('assetState'),
     gameResSection: $('gameResSection'),
@@ -17,10 +18,17 @@
     format: $('format'), engine: $('engine'), sizeMode: $('sizeMode'),
     pngCompression: $('pngCompression'), pngCompressionVal: $('pngCompressionVal'),
     previewWidth: $('previewWidth'), jpegQuality: $('jpegQuality'), jpegQualityVal: $('jpegQualityVal'),
+    aspect: $('aspect'), cropEnable: $('cropEnable'), cropInputs: $('cropInputs'), cropHint: $('cropHint'),
+    cropX: $('cropX'), cropY: $('cropY'), cropWidth: $('cropWidth'), cropHeight: $('cropHeight'),
+    advancedOptions: $('advancedOptions'), markerShape: $('markerShape'), markerSize: $('markerSize'),
+    tunnelPaths: $('tunnelPaths'), tunnelPosition: $('tunnelPosition'), iceGrowth: $('iceGrowth'), compressTiles: $('compressTiles'),
+    fixOverlays: $('fixOverlays'), fixTiles: $('fixTiles'), noExpandMixes: $('noExpandMixes'), ignoreLighting: $('ignoreLighting'),
+    zipTemplate: $('zipTemplate'),
+    batchQueue: $('batchQueue'), batchQueueList: $('batchQueueList'), batchResumeBtn: $('batchResumeBtn'), batchRetryBtn: $('batchRetryBtn'), batchClearBtn: $('batchClearBtn'),
     jpegQualityField: $('jpegQualityField'), pngCompressionField: $('pngCompressionField'),
     presetSelect: $('presetSelect'), presetSaveBtn: $('presetSaveBtn'), presetDeleteBtn: $('presetDeleteBtn'),
     serverHealth: $('serverHealth'), appVersion: $('appVersion'),
-    themeBtn: $('themeBtn'), toastStack: $('toastStack'),
+    themeBtn: $('themeBtn'), themeMenu: $('themeMenu'), toastStack: $('toastStack'),
     markStartPos: $('markStartPos'), markOre: $('markOre'),
     renderBtn: $('renderBtn'), renderAllBtn: $('renderAllBtn'), zipBtn: $('zipBtn'), cancelBtn: $('cancelBtn'), renderState: $('renderState'),
     progressWrap: $('progressWrap'), progressFill: $('progressFill'),
@@ -45,6 +53,11 @@
   let batchBusy = false;
   let cancelRequested = false;
   let batchCancelled = false;
+  let batchItems = [];
+  let batchCurrent = null;
+  let batchSkipCurrent = false;
+  let batchZipEntries = [];
+  let mapDragIndex = null;
   let currentJobId = null;
   let abortController = null;
   let lastRenderResult = null;
@@ -53,6 +66,7 @@
   let historySeq = 0;
   const MAX_HISTORY = 12;
   let mapInfoCache = new Map();
+  const mapStatsCache = new WeakMap();
   let currentMapInfo = null;
   let currentInfoEntry = null;
   let infoRequestSeq = 0;
@@ -60,6 +74,7 @@
   let renderStart = 0;
   let lastStartArgs = [];
   let blobUrl = null;
+  let infoRenderEmpty = true;
   let br = null;
   let brAssetsSig = '';
 
@@ -75,7 +90,20 @@
     zh: {
       'title': 'CNCMaps TS · 地图渲染器',
       'langBtn': '🌐 English',
-      'themeToggle': '切换明暗主题',
+      'themeToggle': '切换主题',
+      'themeDark': '深色',
+      'themeLight': '浅色',
+      'themeTerminal': '军规终端',
+      'themeHolo': '全息冷蓝',
+      'themePaper': '纸感工作台',
+      'themeContrast': '高对比',
+      'themeCyber': '赛博紫',
+      'themeSoviet': '铁幕红',
+      'themeFrost': '冰霜白',
+      'themeSunset': '落日橙',
+      'themeGroupDark': '深色系',
+      'themeGroupLight': '浅色系',
+      'themeGroupSpecial': '无障碍',
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · 地图渲染器',
       'srcTitle': '地图来源',
       'modeLabel': '渲染位置',
@@ -111,6 +139,9 @@
       'removeMap': '移除',
       'mapsCleared': '已清空地图列表',
       'mapRemoved': '已移除地图',
+      'mapReorder': '地图顺序已调整',
+      'streamEnded': '渲染连接提前断开，请重试',
+      'zipFailed': 'ZIP 创建失败，请重试',
       'paramsTitle': '渲染参数',
       'lblFormat': '输出格式',
       'lblEngine': '引擎',
@@ -127,6 +158,18 @@
       'lblJpegQuality': 'JPEG 质量',
       'lblPreviewWidth': '预览宽度',
       'previewOriginal': '原始尺寸',
+      'lblAspect': '画幅', 'aspectFree': '原始比例',
+      'lblCrop': '区域裁剪', 'cropEnable': '启用', 'cropWidth': '宽 %', 'cropHeight': '高 %',
+      'cropHint': '裁剪区域相对当前尺寸的百分比',
+      'advancedTitle': '高级渲染',
+      'lblMarkerShape': '出生点形状', 'markerSquared': '方块', 'markerCircled': '圆形', 'markerDiamond': '菱形', 'markerEllipsed': '椭圆', 'markerStar': '星形', 'markerTiled': '平铺',
+      'lblMarkerSize': '标记大小', 'tglTunnels': '隧道路径', 'tglTunnelPos': '隧道位置偏移',
+      'tglIce': '冰面增长', 'tglCompressTiles': '压缩瓦片', 'tglFixOverlays': '修复覆盖物', 'tglFixTiles': '修复瓦片',
+      'tglNoExpandMixes': '不展开 MIX', 'tglIgnoreLighting': '忽略光照',
+      'lblZipTemplate': 'ZIP 文件名模板', 'zipTemplateHint': '变量：{map} {engine} {width} {height} {index} {ext}，重名会自动加序号', 'batchResume': '继续未完成', 'bqResultMissing': '结果未缓存，请重试',
+      'batchQueueTitle': '批量队列', 'batchRetryFailed': '重试失败', 'batchClear': '关闭', 'batchSkippedSuffix': ' · 跳过 {n} 张', 'batchRestored': '已恢复上次批量队列',
+      'bqPending': '待渲染', 'bqRendering': '渲染中', 'bqDone': '完成', 'bqFailed': '失败', 'bqSkipped': '跳过',
+      'bqSkip': '跳过', 'bqResume': '恢复', 'bqSkipCurrent': '跳过本张',
       'presetCustom': '自定义参数',
       'presetSave': '保存预设',
       'presetDelete': '删除',
@@ -151,12 +194,19 @@
       'mapInfoTitle': '地图信息',
       'infoName': '名称', 'infoAuthor': '作者', 'infoSize': '尺寸',
       'infoPlayers': '玩家数', 'infoTheater': '剧场',
+      'analysisTitle': '渲染统计',
+      'analysisTerrain': '地形', 'analysisResources': '资源', 'analysisObjects': '物件',
+      'analysisWater': '水面', 'analysisShore': '海岸', 'analysisCliff': '悬崖', 'analysisRamp': '斜坡', 'analysisElevation': '海拔',
+      'analysisOre': '矿石', 'analysisGems': '宝石', 'analysisCredits': '信用点', 'analysisSpawners': '矿点',
+      'analysisStructures': '建筑', 'analysisTech': '科技建筑', 'analysisUnits': '单位', 'analysisInfantry': '步兵', 'analysisAircraft': '飞机', 'analysisBridges': '桥梁',
       'infoLoading': '读取地图信息…', 'infoNone': '—',
       'dropHint': '可直接把地图文件拖到此面板',
       'readingGameDir': '读取游戏目录…',
       'gameDirPermission': '没有游戏目录读取权限',
       'gameDirRestoreFail': '无法恢复上次的游戏目录，请重新选择',
       'renderStateIdle': '尚未渲染',
+      'mapFirst': '请先选择地图',
+      'downloadOriginal': '⬇ 下载原图',
       'phaseWait': '等待开始',
       'prevTitle': '预览',
       'previewPlaceholder': '渲染完成后自动显示地图预览',
@@ -215,7 +265,20 @@
     en: {
       'title': 'CNCMaps TS · Map Renderer',
       'langBtn': '🌐 中文',
-      'themeToggle': 'Toggle light/dark theme',
+      'themeToggle': 'Change theme',
+      'themeDark': 'Dark',
+      'themeLight': 'Light',
+      'themeTerminal': 'Field Terminal',
+      'themeHolo': 'Holo Blue',
+      'themePaper': 'Paper Desk',
+      'themeContrast': 'High Contrast',
+      'themeCyber': 'Cyber Violet',
+      'themeSoviet': 'Iron Curtain',
+      'themeFrost': 'Frost Light',
+      'themeSunset': 'Sunset Ember',
+      'themeGroupDark': 'Dark',
+      'themeGroupLight': 'Light',
+      'themeGroupSpecial': 'Accessibility',
       'tagline': 'Red Alert 2 / Yuri\'s Revenge · Map Renderer',
       'srcTitle': 'Map Source',
       'modeLabel': 'Render Location',
@@ -251,6 +314,9 @@
       'removeMap': 'Remove',
       'mapsCleared': 'Map list cleared',
       'mapRemoved': 'Map removed',
+      'mapReorder': 'Map order updated',
+      'streamEnded': 'Render connection ended early; please retry',
+      'zipFailed': 'ZIP creation failed; please retry',
       'paramsTitle': 'Render Options',
       'lblFormat': 'Output Format',
       'lblEngine': 'Engine',
@@ -267,6 +333,18 @@
       'lblJpegQuality': 'JPEG Quality',
       'lblPreviewWidth': 'Preview Width',
       'previewOriginal': 'Original Size',
+      'lblAspect': 'Aspect', 'aspectFree': 'Original ratio',
+      'lblCrop': 'Crop', 'cropEnable': 'Enabled', 'cropWidth': 'W %', 'cropHeight': 'H %',
+      'cropHint': 'Crop values are percentages of the current size rect',
+      'advancedTitle': 'Advanced Render',
+      'lblMarkerShape': 'Start marker', 'markerSquared': 'Squared', 'markerCircled': 'Circled', 'markerDiamond': 'Diamond', 'markerEllipsed': 'Ellipsed', 'markerStar': 'Star', 'markerTiled': 'Tiled',
+      'lblMarkerSize': 'Marker size', 'tglTunnels': 'Tunnel paths', 'tglTunnelPos': 'Tunnel offset',
+      'tglIce': 'Ice growth', 'tglCompressTiles': 'Compress tiles', 'tglFixOverlays': 'Fix overlays', 'tglFixTiles': 'Fix tiles',
+      'tglNoExpandMixes': 'Skip expand MIX', 'tglIgnoreLighting': 'Ignore lighting',
+      'lblZipTemplate': 'ZIP filename template', 'zipTemplateHint': 'Variables: {map} {engine} {width} {height} {index} {ext}; duplicate names get a suffix', 'batchResume': 'Resume unfinished', 'bqResultMissing': 'Result not cached; retry it',
+      'batchQueueTitle': 'Batch Queue', 'batchRetryFailed': 'Retry failed', 'batchClear': 'Close', 'batchSkippedSuffix': ' · {n} skipped', 'batchRestored': 'Previous batch queue restored',
+      'bqPending': 'Pending', 'bqRendering': 'Rendering', 'bqDone': 'Done', 'bqFailed': 'Failed', 'bqSkipped': 'Skipped',
+      'bqSkip': 'Skip', 'bqResume': 'Restore', 'bqSkipCurrent': 'Skip this',
       'presetCustom': 'Custom',
       'presetSave': 'Save Preset',
       'presetDelete': 'Delete',
@@ -291,12 +369,19 @@
       'mapInfoTitle': 'Map Info',
       'infoName': 'Name', 'infoAuthor': 'Author', 'infoSize': 'Size',
       'infoPlayers': 'Players', 'infoTheater': 'Theater',
+      'analysisTitle': 'Render Stats',
+      'analysisTerrain': 'Terrain', 'analysisResources': 'Resources', 'analysisObjects': 'Objects',
+      'analysisWater': 'Water', 'analysisShore': 'Shore', 'analysisCliff': 'Cliff', 'analysisRamp': 'Ramp', 'analysisElevation': 'Elevation',
+      'analysisOre': 'Ore', 'analysisGems': 'Gems', 'analysisCredits': 'Credits', 'analysisSpawners': 'Ore spawners',
+      'analysisStructures': 'Structures', 'analysisTech': 'Tech', 'analysisUnits': 'Units', 'analysisInfantry': 'Infantry', 'analysisAircraft': 'Aircraft', 'analysisBridges': 'Bridges',
       'infoLoading': 'Reading map info…', 'infoNone': '—',
       'dropHint': 'Drag map files onto this panel',
       'readingGameDir': 'Reading game folder…',
       'gameDirPermission': 'No permission to read the game folder',
       'gameDirRestoreFail': 'Could not restore the previous game folder; select it again',
       'renderStateIdle': 'Not rendered yet',
+      'mapFirst': 'Select a map first',
+      'downloadOriginal': '⬇ Download original',
       'phaseWait': 'Waiting to start',
       'prevTitle': 'Preview',
       'previewPlaceholder': 'Map preview will appear after rendering',
@@ -379,12 +464,11 @@
         + t('creditHint') + ' | CNCMaps TS · by 1372704087';
     }
     els.langBtn.textContent = t('langBtn');
-    els.themeBtn.title = t('themeToggle');
-    els.themeBtn.setAttribute('aria-label', t('themeToggle'));
+    renderThemeMenu();
+    updateThemeButton();
     els.appVersion.title = t('versionTitle') + ' ' + APP_VERSION;
     setEngineTag();
-    if (els.infoRender.textContent === I18N.zh['infoRenderEmpty'])
-      els.infoRender.textContent = t('infoRenderEmpty');
+    if (infoRenderEmpty) els.infoRender.textContent = t('infoRenderEmpty');
     if (assetInfo)
       els.assetState.textContent = tf('assetLocalReady', assetInfo);
     if (currentInfoEntry) renderMapInfo(currentInfoEntry, currentMapInfo);
@@ -393,6 +477,7 @@
     applyModeUI();
     populatePresets(els.presetSelect.value === '' ? null : Number(els.presetSelect.value));
     renderHistoryList();
+    renderBatchQueue();
   }
   // map current dynamic render-state text back to its i18n key (for live switch)
   function renderStateSupportsT(text) {
@@ -409,19 +494,172 @@
   els.langBtn.onclick = () => setLang(LANG === 'zh' ? 'en' : 'zh');
 
   const THEME_KEY = 'cncmaps_theme';
-  function applyTheme() {
-    const saved = localStorage.getItem(THEME_KEY);
+  const THEME_GROUPS = {
+    dark: 'themeGroupDark',
+    light: 'themeGroupLight',
+    special: 'themeGroupSpecial',
+  };
+  const THEMES = [
+    { id: 'dark', labelKey: 'themeDark', group: 'dark' },
+    { id: 'terminal', labelKey: 'themeTerminal', group: 'dark' },
+    { id: 'holo', labelKey: 'themeHolo', group: 'dark' },
+    { id: 'cyber', labelKey: 'themeCyber', group: 'dark' },
+    { id: 'soviet', labelKey: 'themeSoviet', group: 'dark' },
+    { id: 'sunset', labelKey: 'themeSunset', group: 'dark' },
+    { id: 'light', labelKey: 'themeLight', group: 'light' },
+    { id: 'frost', labelKey: 'themeFrost', group: 'light' },
+    { id: 'paper', labelKey: 'themePaper', group: 'light' },
+    { id: 'contrast', labelKey: 'themeContrast', group: 'special' },
+  ];
+  const THEME_IDS = THEMES.map((item) => item.id);
+  let currentTheme = 'dark';
+
+  function systemTheme() {
     const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
-    const theme = saved === 'light' || saved === 'dark' ? saved : (prefersLight ? 'light' : 'dark');
-    document.documentElement.dataset.cncmapsTheme = theme;
-    els.themeBtn.textContent = theme === 'light' ? '🌙' : '☀️';
+    return prefersLight ? 'light' : 'dark';
   }
-  function toggleTheme() {
-    const next = document.documentElement.dataset.cncmapsTheme === 'light' ? 'dark' : 'light';
-    localStorage.setItem(THEME_KEY, next);
-    applyTheme();
+  function savedTheme() {
+    let saved = null;
+    try { saved = localStorage.getItem(THEME_KEY); } catch (e) { /* storage may be blocked */ }
+    return THEME_IDS.indexOf(saved) !== -1 ? saved : systemTheme();
   }
-  els.themeBtn.onclick = toggleTheme;
+  function themeLabel(id) {
+    const meta = THEMES.find((item) => item.id === id);
+    return t(meta ? meta.labelKey : 'themeDark');
+  }
+  function updateThemeButton() {
+    els.themeBtn.dataset.themeId = currentTheme;
+    const label = t('themeToggle') + ' · ' + themeLabel(currentTheme);
+    els.themeBtn.title = label;
+    els.themeBtn.setAttribute('aria-label', label);
+    els.themeMenu.querySelectorAll('.theme-item').forEach((item) => {
+      item.setAttribute('aria-checked', item.dataset.themeId === currentTheme ? 'true' : 'false');
+    });
+  }
+  function renderThemeMenu() {
+    if (!els.themeMenu) return;
+    els.themeMenu.textContent = '';
+    let currentGroup = null;
+    THEMES.forEach((item) => {
+      if (item.group !== currentGroup) {
+        currentGroup = item.group;
+        const heading = document.createElement('div');
+        heading.className = 'theme-group';
+        heading.setAttribute('role', 'presentation');
+        heading.textContent = t(THEME_GROUPS[item.group]);
+        els.themeMenu.append(heading);
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'theme-item';
+      btn.dataset.themeId = item.id;
+      btn.setAttribute('role', 'menuitemradio');
+      btn.setAttribute('aria-checked', item.id === currentTheme ? 'true' : 'false');
+      const swatch = document.createElement('span');
+      swatch.className = 'theme-swatch';
+      swatch.setAttribute('aria-hidden', 'true');
+      const name = document.createElement('span');
+      name.className = 'theme-name';
+      name.textContent = t(item.labelKey);
+      const check = document.createElement('span');
+      check.className = 'theme-check';
+      check.setAttribute('aria-hidden', 'true');
+      check.textContent = '✓';
+      btn.append(swatch, name, check);
+      els.themeMenu.append(btn);
+    });
+    els.themeMenu.setAttribute('aria-label', t('themeToggle'));
+  }
+  function applyTheme(theme) {
+    currentTheme = THEME_IDS.indexOf(theme) !== -1 ? theme : savedTheme();
+    document.documentElement.dataset.cncmapsTheme = currentTheme;
+    updateThemeButton();
+  }
+  let themeTransition = null;
+  function reducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+  function themeRevealPoint(origin) {
+    const rect = els.themeBtn.getBoundingClientRect();
+    const x = origin && origin.x > 0 ? origin.x : rect.left + rect.width / 2;
+    const y = origin && origin.y > 0 ? origin.y : rect.top + rect.height / 2;
+    document.documentElement.style.setProperty('--theme-reveal-x', Math.round(x) + 'px');
+    document.documentElement.style.setProperty('--theme-reveal-y', Math.round(y) + 'px');
+  }
+  function commitTheme(theme) {
+    try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* theme still applies for this session */ }
+    applyTheme(theme);
+  }
+  function runThemeVeil() {
+    const veil = $('themeVeil');
+    if (!veil || reducedMotion()) return;
+    veil.classList.remove('run');
+    void veil.offsetWidth;
+    veil.classList.add('run');
+  }
+  function setTheme(theme, origin) {
+    if (THEME_IDS.indexOf(theme) === -1 || theme === currentTheme) return;
+    themeRevealPoint(origin);
+    if (document.startViewTransition && !reducedMotion()) {
+      try {
+        if (themeTransition) themeTransition.skipTransition();
+        const transition = document.startViewTransition(() => commitTheme(theme));
+        themeTransition = transition;
+        transition.finished.finally(() => {
+          if (themeTransition === transition) themeTransition = null;
+        }).catch(() => {});
+        return;
+      } catch (e) { /* fall back to a soft veil pulse */ }
+    }
+    commitTheme(theme);
+    runThemeVeil();
+  }
+  function setThemeMenuOpen(open) {
+    els.themeMenu.hidden = !open;
+    els.themeBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      const active = els.themeMenu.querySelector('.theme-item[aria-checked="true"]');
+      if (active) active.focus();
+    }
+  }
+  els.themeBtn.onclick = (event) => {
+    event.stopPropagation();
+    setThemeMenuOpen(els.themeMenu.hidden);
+  };
+  els.themeMenu.addEventListener('click', (event) => {
+    const item = event.target.closest('.theme-item');
+    if (!item) return;
+    setThemeMenuOpen(false);
+    els.themeBtn.focus();
+    setTheme(item.dataset.themeId, { x: event.clientX, y: event.clientY });
+  });
+  els.themeMenu.addEventListener('keydown', (event) => {
+    const items = Array.from(els.themeMenu.querySelectorAll('.theme-item'));
+    const index = items.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      const next = (index + delta + items.length) % items.length;
+      items[next].focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setThemeMenuOpen(false);
+      els.themeBtn.focus();
+    }
+  });
+  document.addEventListener('click', (event) => {
+    if (els.themeMenu.hidden) return;
+    if (els.themeMenu.contains(event.target) || els.themeBtn.contains(event.target)) return;
+    setThemeMenuOpen(false);
+  });
+
+  const themeVeil = $('themeVeil');
+  if (themeVeil) themeVeil.addEventListener('animationend', () => themeVeil.classList.remove('run'));
+  function syncFxPlayState() {
+    document.documentElement.classList.toggle('fx-paused', document.hidden);
+  }
+  document.addEventListener('visibilitychange', syncFxPlayState);
+  syncFxPlayState();
 
   function setStatus(state, text) {
     els.statusDot.className = 'dot' + (state ? ' ' + state : '');
@@ -476,6 +714,8 @@
     els.resLabel.textContent = t('resLabelBrowser');
     els.uploadBtn.querySelector('span').textContent = t(browser ? 'uploadBtnBrowser' : 'uploadBtnServer');
     els.gameResSection.style.display = browser ? '' : 'none';
+    els.serverHealth.hidden = browser;
+    if (browser) els.serverHealth.textContent = '';
     els.assetState.textContent = assetInfo
       ? tf('assetLocalReady', assetInfo)
       : t('assetStateEmptyBrowser');
@@ -489,14 +729,27 @@
     els.cancelBtn.hidden = idle;
     els.cancelBtn.disabled = cancelRequested;
     els.clearMapsBtn.disabled = !idle || maps.length === 0;
+    if (els.batchRetryBtn) els.batchRetryBtn.disabled = !idle;
+    if (els.batchClearBtn) els.batchClearBtn.disabled = !idle;
+    updateMapInteractivity();
   }
 
-  function cancelRender() {
-    if (!renderBusy && !batchBusy) return;
+  // Keep the drag/remove affordances in sync with renderBusy/batchBusy. The list
+  // is only rebuilt at item boundaries, so leaving this to renderMapList() makes
+  // items permanently non-draggable after a batch and still draggable during a
+  // single render.
+  function updateMapInteractivity() {
+    const canEdit = !renderBusy && !batchBusy;
+    els.maplist.querySelectorAll('.maplist-item').forEach((item) => {
+      item.draggable = canEdit;
+      const remove = item.querySelector('.ml-remove');
+      if (remove) remove.disabled = !canEdit;
+    });
+  }
+
+  function abortActiveRender() {
     if (cancelRequested) return;
     cancelRequested = true;
-    if (batchBusy) batchCancelled = true;
-    setStatus('work', t('cancelling'));
     updateRenderButtons();
     if (br) {
       try { br.terminate(); } catch (e) { /* ignore */ }
@@ -513,6 +766,22 @@
     if (abortController) {
       try { abortController.abort(); } catch (e) { /* ignore */ }
     }
+  }
+
+  function cancelRender() {
+    if (!renderBusy && !batchBusy) return;
+    if (cancelRequested) return;
+    if (batchBusy) batchCancelled = true;
+    setStatus('work', t('cancelling'));
+    abortActiveRender();
+  }
+
+  function skipCurrentBatchItem() {
+    if (!batchBusy || !batchCurrent || batchCurrent.status !== 'rendering') return;
+    if (cancelRequested) return;
+    batchSkipCurrent = true;
+    setStatus('work', t('cancelling'));
+    abortActiveRender();
   }
 
   function applyFormatFields() {
@@ -536,6 +805,24 @@
     localStorage.setItem(PRESET_KEY, JSON.stringify(list));
   }
 
+  function syncCropInputs() {
+    const enabled = els.cropEnable.checked;
+    els.cropInputs.hidden = !enabled;
+    els.cropHint.hidden = !enabled;
+  }
+
+  function cropValues() {
+    const clamp = (v, min, max) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min;
+    };
+    const x = clamp(els.cropX.value, 0, 99);
+    const y = clamp(els.cropY.value, 0, 99);
+    const width = Math.min(clamp(els.cropWidth.value, 1, 100), 100 - x);
+    const height = Math.min(clamp(els.cropHeight.value, 1, 100), 100 - y);
+    return { x, y, width, height };
+  }
+
   function currentPresetValues() {
     return {
       format: els.format.value,
@@ -546,6 +833,23 @@
       jpegQuality: els.jpegQuality.value,
       markStartPos: els.markStartPos.checked,
       markOre: els.markOre.checked,
+      aspect: els.aspect.value,
+      cropEnabled: els.cropEnable.checked,
+      cropX: els.cropX.value,
+      cropY: els.cropY.value,
+      cropWidth: els.cropWidth.value,
+      cropHeight: els.cropHeight.value,
+      markerShape: els.markerShape.value,
+      markerSize: els.markerSize.value,
+      tunnelPaths: els.tunnelPaths.checked,
+      tunnelPosition: els.tunnelPosition.checked,
+      iceGrowth: els.iceGrowth.checked,
+      compressTiles: els.compressTiles.checked,
+      fixOverlays: els.fixOverlays.checked,
+      fixTiles: els.fixTiles.checked,
+      noExpandMixes: els.noExpandMixes.checked,
+      ignoreLighting: els.ignoreLighting.checked,
+      zipTemplate: els.zipTemplate.value,
     };
   }
 
@@ -561,6 +865,24 @@
     els.jpegQualityVal.textContent = els.jpegQuality.value;
     els.markStartPos.checked = !!values.markStartPos;
     els.markOre.checked = !!values.markOre;
+    els.aspect.value = ['1:1', '4:5', '16:9', '9:16'].includes(values.aspect) ? values.aspect : '';
+    els.cropEnable.checked = !!values.cropEnabled;
+    els.cropX.value = values.cropX ?? '0';
+    els.cropY.value = values.cropY ?? '0';
+    els.cropWidth.value = values.cropWidth ?? '100';
+    els.cropHeight.value = values.cropHeight ?? '100';
+    els.markerShape.value = ['squared', 'circled', 'diamond', 'ellipsed', 'star', 'tiled'].includes(values.markerShape) ? values.markerShape : 'squared';
+    els.markerSize.value = values.markerSize ?? '4';
+    els.tunnelPaths.checked = !!values.tunnelPaths;
+    els.tunnelPosition.checked = !!values.tunnelPosition;
+    els.iceGrowth.checked = !!values.iceGrowth;
+    els.compressTiles.checked = !!values.compressTiles;
+    els.fixOverlays.checked = !!values.fixOverlays;
+    els.fixTiles.checked = !!values.fixTiles;
+    els.noExpandMixes.checked = !!values.noExpandMixes;
+    els.ignoreLighting.checked = !!values.ignoreLighting;
+    els.zipTemplate.value = values.zipTemplate || '{map}_{engine}_{width}x{height}.{ext}';
+    syncCropInputs();
     applyFormatFields();
     setEngineTag();
   }
@@ -655,6 +977,7 @@
       empty.textContent = t('maplistEmpty');
       els.maplist.appendChild(empty);
       els.mapInfo.hidden = true;
+      els.mapAnalysis.hidden = true;
       updateRenderButtons();
       return;
     }
@@ -662,12 +985,54 @@
       const item = document.createElement('div');
       item.className = 'maplist-item';
       item.dataset.key = m.key;
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', m.name);
       item.innerHTML = '<span class="ic">📤</span><span class="nm"></span><span class="sz"></span>';
       item.querySelector('.nm').textContent = m.name;
       const isLocalOnly = m.file && !m.uploadToken;
       item.querySelector('.sz').textContent = isLocalOnly ? t('browserBadge') : fmtSize(m.size);
       item.querySelector('.ic').textContent = m.file ? '📄' : '📤';
-      item.onclick = () => selectMap(m);
+      item.onclick = () => { if (!renderBusy && !batchBusy) selectMap(m); };
+      item.onkeydown = (e) => {
+        if (e.target !== item || e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        if (!renderBusy && !batchBusy) selectMap(m);
+      };
+      item.draggable = !renderBusy && !batchBusy;
+      item.addEventListener('dragstart', (e) => {
+        if (!item.draggable) return;
+        mapDragIndex = maps.indexOf(m);
+        item.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(mapDragIndex));
+        }
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        els.maplist.querySelectorAll('.drag-over').forEach((x) => x.classList.remove('drag-over'));
+        mapDragIndex = null;
+      });
+      item.addEventListener('dragover', (e) => {
+        if (mapDragIndex == null) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        item.classList.add('drag-over');
+      });
+      item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        item.classList.remove('drag-over');
+        const from = mapDragIndex;
+        const to = maps.indexOf(m);
+        mapDragIndex = null;
+        if (from == null || from === to || from < 0 || to < 0) return;
+        const [moved] = maps.splice(from, 1);
+        maps.splice(to, 0, moved);
+        renderMapList();
+        setStatus('ok', t('mapReorder'));
+      });
       const rm = document.createElement('button');
       rm.type = 'button';
       rm.className = 'ml-remove';
@@ -686,6 +1051,7 @@
     selectedMap = null;
     currentInfoEntry = null;
     els.mapInfo.hidden = true;
+    els.mapAnalysis.hidden = true;
     els.renderState.textContent = t('renderStateIdle');
   }
 
@@ -695,6 +1061,7 @@
     if (idx === -1) return;
     maps.splice(idx, 1);
     if (selectedMap === entry) selectedMap = maps[Math.min(idx, maps.length - 1)] || null;
+    if (!batchBusy) clearBatchQueue();
     if (!maps.length) resetMapSelection();
     renderMapList();
     els.infoMaps.textContent = t('mapsPrefix') + maps.length;
@@ -705,6 +1072,7 @@
   function clearMaps() {
     if (renderBusy || batchBusy || !maps.length) return;
     maps.length = 0;
+    clearBatchQueue();
     resetMapSelection();
     renderMapList();
     els.infoMaps.textContent = t('mapsPrefix') + 0;
@@ -715,7 +1083,7 @@
   function renderMapInfo(entry, info) {
     currentInfoEntry = entry;
     currentMapInfo = info;
-    if (!entry) { els.mapInfo.hidden = true; return; }
+    if (!entry) { els.mapInfo.hidden = true; renderMapAnalysis(null); return; }
     const rows = info ? [
       [t('infoName'), info.name || entry.name],
       [t('infoAuthor'), info.author || t('infoNone')],
@@ -750,6 +1118,86 @@
       els.mapInfoBody.appendChild(row);
     }
     els.mapInfo.hidden = false;
+    renderMapAnalysis(entry);
+  }
+
+  function normalizeMapStats(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const terrain = raw.terrain && typeof raw.terrain === 'object' ? raw.terrain : null;
+    const resources = raw.resources && typeof raw.resources === 'object' ? raw.resources : null;
+    const objects = raw.objects && typeof raw.objects === 'object' ? raw.objects : null;
+    if (!terrain && !resources && !objects) return null;
+    return { terrain: terrain || {}, resources: resources || {}, objects: objects || {} };
+  }
+
+  function setMapStats(entry, raw) {
+    if (!entry) return;
+    const stats = normalizeMapStats(raw);
+    if (!stats) return;
+    mapStatsCache.set(entry, stats);
+    if (selectedMap === entry) renderMapAnalysis(entry);
+  }
+
+  function renderMapAnalysis(entry) {
+    const stats = entry ? mapStatsCache.get(entry) : null;
+    if (!stats) {
+      els.mapAnalysis.hidden = true;
+      els.mapAnalysisBody.innerHTML = '';
+      return;
+    }
+    const fmt = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toLocaleString(LANG === 'en' ? 'en-US' : 'zh-CN') : '0';
+    };
+    const terrain = stats.terrain;
+    const resources = stats.resources;
+    const objects = stats.objects;
+    const rows = [
+      [t('analysisTerrain'), [
+        t('analysisWater') + ' ' + fmt(terrain.waterTiles),
+        t('analysisShore') + ' ' + fmt(terrain.shoreTiles),
+        t('analysisCliff') + ' ' + fmt(terrain.cliffTiles),
+        t('analysisRamp') + ' ' + fmt(terrain.rampTiles),
+        t('analysisElevation') + ' ' + fmt(terrain.heightMin) + '–' + fmt(terrain.heightMax),
+      ].join(' · ')],
+      [t('analysisResources'), [
+        t('analysisOre') + ' ' + fmt(resources.oreCells),
+        t('analysisGems') + ' ' + fmt(resources.gemCells),
+        t('analysisCredits') + ' ' + fmt(resources.totalCredits),
+        t('analysisSpawners') + ' ' + fmt(resources.oreSpawners),
+      ].join(' · ')],
+      [t('analysisObjects'), [
+        t('analysisStructures') + ' ' + fmt(objects.structures),
+        t('analysisTech') + ' ' + fmt(objects.techStructures),
+        t('analysisUnits') + ' ' + fmt(objects.units),
+        t('analysisInfantry') + ' ' + fmt(objects.infantry),
+        t('analysisAircraft') + ' ' + fmt(objects.aircraft),
+        t('analysisBridges') + ' ' + (objects.hasBridges ? '✓' : '—'),
+      ].join(' · ')],
+    ];
+    els.mapAnalysisBody.innerHTML = '';
+    for (const [key, value] of rows) {
+      const row = document.createElement('div');
+      row.className = 'ma-row';
+      const k = document.createElement('span');
+      k.className = 'ma-key';
+      k.textContent = key;
+      const v = document.createElement('span');
+      v.className = 'ma-val';
+      v.textContent = value;
+      row.append(k, v);
+      els.mapAnalysisBody.appendChild(row);
+    }
+    els.mapAnalysisSummary.textContent = [
+      t('analysisOre') + ' ' + fmt(resources.oreCells),
+      t('analysisStructures') + ' ' + fmt(objects.structures),
+      t('analysisUnits') + ' ' + fmt(objects.units),
+    ].join(' · ');
+    els.mapAnalysis.hidden = false;
+    if (!els.mapAnalysis.dataset.autoOpen) {
+      els.mapAnalysis.open = true;
+      els.mapAnalysis.dataset.autoOpen = '1';
+    }
   }
 
   async function loadMapInfo(entry) {
@@ -801,7 +1249,15 @@
           });
           const data = await resp.json();
           if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
-          const entry = { key: 'up:' + data.token, name: data.name, size: data.size, uploadToken: data.token, file };
+          const entry = {
+            key: 'up:' + data.token,
+            name: data.name,
+            size: data.size,
+            uploadToken: data.token,
+            uploadedAt: Number(data.uploadedAt) || Date.now(),
+            tokenExpiresAt: Number(data.expiresAt) || undefined,
+            file,
+          };
           maps.push(entry);
           ok++;
           if (!selectedMap) selectedMap = entry;
@@ -853,12 +1309,19 @@
     toast(msg, 'ok');
   }
 
-  function setLocalAssets(files) {
-    gameFiles = files;
-    const size = files.reduce((sum, f) => sum + f.size, 0);
-    assetInfo = { n: files.length, size: fmtSize(size) };
+  function setLocalAssets(assets) {
+    gameFiles = assets;
+    const size = assets.reduce((sum, a) => sum + a.file.size, 0);
+    assetInfo = { n: assets.length, size: fmtSize(size) };
     els.assetState.textContent = tf('assetLocalReady', assetInfo);
     setStatus('ok', els.assetState.textContent);
+  }
+
+  function clearLocalAssets() {
+    gameFiles = [];
+    assetInfo = null;
+    brAssetsSig = '';
+    els.assetState.textContent = t('assetStateEmptyBrowser');
   }
 
   const ASSET_RE = /\.(mix|mmx|yro|ini|csf|pal|shp|tmp|vxl|hva|vpl|pkt)$/i;
@@ -869,6 +1332,14 @@
     els.progressPct.textContent = Math.round(pct) + '%';
     els.progressPhase.textContent = phase || '';
     els.progressWrap.classList.add('show');
+    if (batchCurrent && batchCurrent.status === 'rendering') {
+      batchCurrent.percent = pct;
+      const row = els.batchQueueList.querySelector('[data-batch-idx="' + batchCurrent.index + '"]');
+      if (row) {
+        const out = row.querySelector('.bq-pct');
+        if (out) out.textContent = Math.round(pct) + '%';
+      }
+    }
   }
 
   // ---- render log ----
@@ -1109,9 +1580,10 @@
     els.lightboxDownload.href = url.includes('/image/')
       ? url.replace('/image/', '/download/')
       : url;
+    els.lightboxDownload.download = name || '';
     els.lightbox.hidden = false;
     zoom = 1;
-    applyZoom(false);
+    applyZoom();
     els.lightboxBody.scrollLeft = 0;
     els.lightboxBody.scrollTop = 0;
     try { els.lightboxClose.focus(); } catch (e) { /* ignore */ }
@@ -1138,39 +1610,31 @@
   let zoom = 1;
   const zoomMin = 0.2, zoomMax = 8;
   function clampZoom(z) { return Math.min(zoomMax, Math.max(zoomMin, z)); }
-  function applyZoom(center) {
+  function applyZoom() {
     const img = els.lightboxImg;
     if (!img.naturalWidth) return;
-    const w = img.naturalWidth * zoom;
-    const h = img.naturalHeight * zoom;
-    // keep the point under cursor roughly stable when zooming with wheel/buttons
-    let cx = 0, cy = 0, bx = 0, by = 0;
-    if (center) {
-      bx = els.lightboxBody.scrollLeft; by = els.lightboxBody.scrollTop;
-      cx = center.x; cy = center.y;
-    }
-    img.style.width = w + 'px';
-    img.style.height = h + 'px';
+    img.style.width = (img.naturalWidth * zoom) + 'px';
+    img.style.height = (img.naturalHeight * zoom) + 'px';
     els.zoomPct.textContent = Math.round(zoom * 100) + '%';
-    if (center) {
-      const scale = w / (img.offsetWidth || w);
-      els.lightboxBody.scrollLeft = bx + (cx - bx) * (scale - 1);
-      els.lightboxBody.scrollTop = by + (cy - by) * (scale - 1);
-    }
   }
   function zoomAt(factor, cx, cy) {
     const before = zoom;
     zoom = clampZoom(before * factor);
     const img = els.lightboxImg;
-    const bx = els.lightboxBody.scrollLeft, by = els.lightboxBody.scrollTop;
-    // point under cursor in image coords
-    const imgX = img.naturalWidth * (bx + cx) / (img.naturalWidth * before);
-    const imgY = img.naturalHeight * (by + cy) / (img.naturalHeight * before);
+    const body = els.lightboxBody;
+    const bodyRect = body.getBoundingClientRect();
+    const imgRect = img.getBoundingClientRect();
+    // Point under the cursor in image coordinates. The image is centered by
+    // margin:auto, so its on-screen origin must come from getBoundingClientRect
+    // rather than assuming it starts at scrollLeft/scrollTop.
+    const imgX = (bodyRect.left + cx - imgRect.left) / before;
+    const imgY = (bodyRect.top + cy - imgRect.top) / before;
     img.style.width = (img.naturalWidth * zoom) + 'px';
     img.style.height = (img.naturalHeight * zoom) + 'px';
     els.zoomPct.textContent = Math.round(zoom * 100) + '%';
-    els.lightboxBody.scrollLeft = imgX * zoom - cx;
-    els.lightboxBody.scrollTop = imgY * zoom - cy;
+    const after = img.getBoundingClientRect();
+    body.scrollLeft += (after.left + imgX * zoom) - (bodyRect.left + cx);
+    body.scrollTop += (after.top + imgY * zoom) - (bodyRect.top + cy);
   }
   let panState = null;
   els.lightboxImg.addEventListener('pointerdown', (e) => {
@@ -1199,7 +1663,11 @@
   }, { passive: false });
 
   async function ensureServerUpload(entry) {
-    if (entry.uploadToken) return;
+    // Token TTL on the server is one hour. Refresh a few minutes early while
+    // the original File is still available instead of failing the next render.
+    const expiresAt = Number(entry.tokenExpiresAt) ||
+      (Number(entry.uploadedAt) ? Number(entry.uploadedAt) + 60 * 60 * 1000 : 0);
+    if (entry.uploadToken && (!expiresAt || Date.now() < expiresAt - 5 * 60 * 1000)) return;
     if (!entry.file) throw new Error(t('browserNoMapFile'));
     const resp = await fetch('/api/upload', {
       method: 'POST',
@@ -1209,6 +1677,8 @@
     const data = await resp.json();
     if (!resp.ok || !data.token) throw new Error(data.error || t('uploadFail'));
     entry.uploadToken = data.token;
+    entry.uploadedAt = Number(data.uploadedAt) || Date.now();
+    entry.tokenExpiresAt = Number(data.expiresAt) || entry.uploadedAt + 60 * 60 * 1000;
     entry.key = 'up:' + data.token;
     entry.size = data.size;
     renderMapList();
@@ -1230,7 +1700,7 @@
     if (renderBusy) return;
     lastRenderResult = { ok: false };
     cancelRequested = false;
-    if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
+    if (!selectedMap) { setStatus('err', t('mapFirst')); return; }
     if (!selectedMap.file) { setStatus('err', t('browserNoMapFile')); return; }
     if (!gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
     if (!BR_CLIENT || !BR_CLIENT.supported()) {
@@ -1266,13 +1736,14 @@
         fallback = true;
         throw Object.assign(new Error(t('browserUnsupported')), { code: 'UNSUPPORTED' });
       }
-      const sig = gameFiles.map((f) => f.name + ':' + f.size + ':' + (f.lastModified || 0)).join('|');
+      const sig = gameFiles.map((a) => a.path + ':' + a.file.size + ':' + (a.file.lastModified || 0)).join('|');
       if (sig !== brAssetsSig) {
         setProgress(2, t('phaseAssets'));
         await br.setAssets(gameFiles);
         brAssetsSig = sig;
       }
       startedRendering = true;
+      const crop = cropValues();
       const res = await br.render(selectedMap.file, selectedMap.name, {
         format: els.format.value,
         engine: els.engine.value,
@@ -1281,6 +1752,21 @@
         jpegQuality: Number(els.jpegQuality.value) || 95,
         markStartPos: els.markStartPos.checked,
         markOre: els.markOre.checked,
+        aspect: els.aspect.value || 'free',
+        crop: els.cropEnable.checked ? {
+          x: crop.x / 100, y: crop.y / 100,
+          width: crop.width / 100, height: crop.height / 100,
+        } : undefined,
+        markerShape: els.markerShape.value,
+        markerSize: Number(els.markerSize.value) || 4,
+        tunnelPaths: els.tunnelPaths.checked,
+        tunnelPosition: els.tunnelPosition.checked,
+        markIceGrowth: els.iceGrowth.checked,
+        compressTiles: els.compressTiles.checked,
+        fixOverlays: els.fixOverlays.checked,
+        fixupTiles: els.fixTiles.checked,
+        noExpandMixes: els.noExpandMixes.checked,
+        ignoreLighting: els.ignoreLighting.checked,
       }, (pct, phase) => {
         setProgress(pct, phaseLabel(phase));
       });
@@ -1289,6 +1775,7 @@
       blobUrl = URL.createObjectURL(res.blob);
       currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
       showPreview(blobUrl, res.name);
+      setMapStats(selectedMap, res.stats);
       addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues);
       els.downloadBtn.disabled = false;
       els.downloadBtn.dataset.url = blobUrl;
@@ -1297,11 +1784,19 @@
       const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
       const engKey = engineKeyFromName(res.engine);
       els.engineTag.textContent = t('enginePrefix') + t(engKey);
+      infoRenderEmpty = false;
       els.infoRender.textContent = t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
       els.renderState.textContent = t('renderDone');
       setStatus('ok', t('complete'));
       renderToast(t('renderDone') + ' · ' + res.name, 'ok');
-      lastRenderResult = { ok: true, blob: res.blob, name: res.name };
+      lastRenderResult = {
+        ok: true,
+        blob: res.blob,
+        name: res.name,
+        engine: res.engine || 'AUTO',
+        width: Number(res.width) || undefined,
+        height: Number(res.height) || undefined,
+      };
     } catch (e) {
       lastRenderResult = { ok: false, error: e };
       const code = e && e.code;
@@ -1354,7 +1849,7 @@
     lastRenderResult = { ok: false };
     cancelRequested = false;
     currentJobId = null;
-    if (!selectedMap) { setStatus('err', '请先选择地图'); return; }
+    if (!selectedMap) { setStatus('err', t('mapFirst')); return; }
     abortController = new AbortController();
 
     renderBusy = true;
@@ -1370,6 +1865,7 @@
 
     try {
       await ensureServerUpload(selectedMap);
+      const crop = cropValues();
       const body = {
         name: selectedMap.name,
         format: els.format.value,
@@ -1380,6 +1876,18 @@
         jpegQuality: Number(els.jpegQuality.value) || 95,
         markStartPos: els.markStartPos.checked,
         markOre: els.markOre.checked,
+        aspect: els.aspect.value || 'free',
+        crop: els.cropEnable.checked ? crop : undefined,
+        markerShape: els.markerShape.value,
+        markerSize: Number(els.markerSize.value) || 4,
+        tunnelPaths: els.tunnelPaths.checked,
+        tunnelPosition: els.tunnelPosition.checked,
+        markIceGrowth: els.iceGrowth.checked,
+        compressTiles: els.compressTiles.checked,
+        fixOverlays: els.fixOverlays.checked,
+        fixupTiles: els.fixTiles.checked,
+        noExpandMixes: els.noExpandMixes.checked,
+        ignoreLighting: els.ignoreLighting.checked,
       };
       if (selectedMap.uploadToken) body.uploadToken = selectedMap.uploadToken;
 
@@ -1402,6 +1910,7 @@
       const dec = new TextDecoder();
       let buf = '';
       let lastProgress = 0;
+      let sawTerminal = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1431,6 +1940,7 @@
               setStatus('err', t('renderError'));
             }
           } else if (evt.type === 'done') {
+            sawTerminal = true;
             if (evt.cancelled) {
               els.renderState.textContent = t('cancelled');
               setStatus('ok', t('cancelled'));
@@ -1440,27 +1950,42 @@
               setProgress(100, t('complete'));
               currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
               showPreview(evt.url, evt.name);
+              setMapStats(selectedMap, evt.meta);
               addRenderHistory(evt.url, evt.downloadUrl, evt.name, null, renderValues);
               els.downloadBtn.disabled = false;
               els.downloadBtn.dataset.url = evt.downloadUrl;
               els.downloadBtn.dataset.name = evt.name;
               const ms = Date.now() - (renderStart || Date.now());
               const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
+              infoRenderEmpty = false;
               els.infoRender.textContent = t('recentPrefix') + (evt.name || '') + ' · ' +
                 argvShort(lastStartArgs) + ' · ' + dur;
               els.renderState.textContent = t('renderDone');
               setStatus('ok', t('complete'));
               renderToast(t('renderDone') + ' · ' + evt.name, 'ok');
-              lastRenderResult = { ok: true, downloadUrl: evt.downloadUrl, name: evt.name };
+              const metaWidth = evt.meta && Number(evt.meta.renderedWidth);
+              const metaHeight = evt.meta && Number(evt.meta.renderedHeight);
+              lastRenderResult = {
+                ok: true,
+                downloadUrl: evt.downloadUrl,
+                name: evt.name,
+                engine: engineFromArgs(lastStartArgs),
+                width: Number.isFinite(metaWidth) && metaWidth > 0 ? metaWidth : undefined,
+                height: Number.isFinite(metaHeight) && metaHeight > 0 ? metaHeight : undefined,
+              };
             } else {
+              const failText = (evt.message || t('renderFailed')) + (evt.code != null ? ' (code ' + evt.code + ')' : '');
+              lastRenderResult = { ok: false, error: new Error(failText) };
               setProgress(lastProgress, t('failCode') + evt.code + ')');
-              appendLog((evt.message || t('renderFailed')) + (evt.code != null ? ' (code ' + evt.code + ')' : ''), 'error');
+              appendLog(failText, 'error');
               openLog();
-              renderToast((evt.message || t('renderFailed')) + (evt.code != null ? ' (code ' + evt.code + ')' : ''), 'error');
+              renderToast(failText, 'error');
               els.renderState.textContent = t('renderFailed');
               setStatus('err', t('renderFailed'));
             }
           } else if (evt.type === 'error') {
+            sawTerminal = true;
+            lastRenderResult = { ok: false, error: new Error(evt.message || t('reqFailed')) };
             appendLog(evt.message || t('reqFailed'), 'error');
             openLog();
             renderToast(evt.message || t('reqFailed'), 'error');
@@ -1469,6 +1994,7 @@
           }
         }
       }
+      if (!sawTerminal) throw new Error(t('streamEnded'));
     } catch (e) {
       if (cancelRequested || (e && e.name === 'AbortError')) {
         els.renderState.textContent = t('cancelled');
@@ -1476,6 +2002,7 @@
         renderToast(t('cancelled'), 'warn');
         lastRenderResult = { ok: false, cancelled: true };
       } else {
+        lastRenderResult = { ok: false, error: e };
         appendLog(e && e.message ? e.message : String(e), 'error');
         openLog();
         renderToast(e && e.message ? e.message : String(e), 'error');
@@ -1494,29 +2021,244 @@
 
   const MAX_BATCH = 12;
 
+  function errorText(err) {
+    if (!err) return t('renderFailed');
+    if (typeof err === 'string') return err;
+    return err.message || String(err);
+  }
+
+  async function blobDimensions(blob) {
+    if (!blob) return { width: 0, height: 0 };
+    try {
+      if (typeof createImageBitmap === 'function') {
+        const bmp = await createImageBitmap(blob);
+        const out = { width: bmp.width, height: bmp.height };
+        if (bmp.close) bmp.close();
+        return out;
+      }
+    } catch (e) { /* fall through to Image */ }
+    return await new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(url); };
+      img.onerror = () => { resolve({ width: 0, height: 0 }); URL.revokeObjectURL(url); };
+      img.src = url;
+    });
+  }
+
+  function zipEntryName(template, item, dims, ext, engine) {
+    const values = {
+      map: item.entry.name.replace(/\.[^.]+$/, ''),
+      engine: engine || 'AUTO',
+      width: dims.width ? String(dims.width) : 'unknown',
+      height: dims.height ? String(dims.height) : 'unknown',
+      index: String(item.index + 1),
+      ext,
+    };
+    let out = String(template || '').trim() || '{map}_{engine}_{width}x{height}.{ext}';
+    out = out.replace(/\{([a-z]+)\}/gi, (m, key) => Object.prototype.hasOwnProperty.call(values, key) ? values[key] : m);
+    out = out.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+    if (!out) out = values.map + '_' + values.engine + '_' + values.width + 'x' + values.height;
+    if (!/\.[A-Za-z0-9]{2,5}$/.test(out)) out += '.' + ext;
+    if (out.length > 180) out = out.slice(0, 170).replace(/[ ._]+$/, '') + '.' + ext;
+    // Windows strips trailing dots/spaces on extraction and refuses device
+    // names as file stems; normalize them inside the archive too.
+    const extMatch = out.match(/\.([A-Za-z0-9]{2,5})$/);
+    const stem = (extMatch ? out.slice(0, -extMatch[0].length) : out).replace(/[ .]+$/g, '');
+    const safeStem = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem) ? '_' + stem : (stem || 'map');
+    out = safeStem + (extMatch ? extMatch[0] : '.' + ext);
+    return out;
+  }
+
+  function uniqueZipName(name, used) {
+    let candidate = name;
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    let n = 1;
+    while (used.has(candidate.toLowerCase())) {
+      n++;
+      candidate = base + '_' + n + ext;
+    }
+    used.add(candidate.toLowerCase());
+    return candidate;
+  }
+
+  function batchStatusLabel(status) {
+    const key = { pending: 'bqPending', rendering: 'bqRendering', ok: 'bqDone', failed: 'bqFailed', skipped: 'bqSkipped' }[status];
+    return key ? t(key) : status;
+  }
+
+  function renderBatchQueue() {
+    if (!els.batchQueue || !els.batchQueueList) return;
+    const hasItems = batchItems.length > 0;
+    els.batchQueue.hidden = !hasItems;
+    if (!hasItems) {
+      els.batchQueueList.replaceChildren();
+      els.batchRetryBtn.hidden = true;
+      els.batchResumeBtn.hidden = true;
+      return;
+    }
+    const rows = batchItems.map((item) => {
+      const row = document.createElement('div');
+      row.className = 'bq-item ' + item.status;
+      row.dataset.batchIdx = String(item.index);
+
+      const dot = document.createElement('span');
+      dot.className = 'bq-dot';
+      row.appendChild(dot);
+
+      const name = document.createElement('span');
+      name.className = 'bq-name';
+      name.textContent = item.entry.name;
+      name.title = item.entry.name;
+      row.appendChild(name);
+
+      const state = document.createElement('span');
+      state.className = 'bq-state';
+      state.textContent = batchStatusLabel(item.status);
+      row.appendChild(state);
+
+      const pct = document.createElement('span');
+      pct.className = 'bq-pct';
+      pct.textContent = item.status === 'ok' ? '100%'
+        : item.status === 'failed' || item.status === 'skipped' ? '—'
+          : Math.round(item.percent || 0) + '%';
+      row.appendChild(pct);
+
+      if (item.error) {
+        row.classList.add('has-error');
+        row.title = item.error;
+        const err = document.createElement('span');
+        err.className = 'bq-error';
+        err.textContent = item.error;
+        err.title = item.error;
+        row.appendChild(err);
+        row.addEventListener('click', (e) => {
+          if (e.target && e.target.closest('button')) return;
+          openLog();
+        });
+      }
+
+      let label = '';
+      let action = null;
+      if (item.status === 'pending') { label = t('bqSkip'); action = () => { item.status = 'skipped'; renderBatchQueue(); schedulePersistBatchQueue(); }; }
+      else if (item.status === 'rendering') { label = t('bqSkipCurrent'); action = skipCurrentBatchItem; }
+      else if (item.status === 'skipped' && batchBusy) { label = t('bqResume'); action = () => { item.status = 'pending'; renderBatchQueue(); schedulePersistBatchQueue(); }; }
+      if (label) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'bq-act';
+        btn.textContent = label;
+        btn.addEventListener('click', action);
+        row.appendChild(btn);
+      }
+      return row;
+    });
+    els.batchQueueList.replaceChildren(...rows);
+
+    const failedCount = batchItems.filter((item) => item.status === 'failed').length;
+    els.batchRetryBtn.hidden = failedCount === 0;
+    els.batchRetryBtn.disabled = batchBusy || renderBusy;
+    els.batchRetryBtn.textContent = failedCount ? t('batchRetryFailed') + ' (' + failedCount + ')' : t('batchRetryFailed');
+    const unfinishedCount = batchItems.filter((item) => item.status === 'pending' || item.status === 'skipped').length;
+    els.batchResumeBtn.hidden = unfinishedCount === 0 || batchBusy || renderBusy;
+    els.batchResumeBtn.disabled = batchBusy || renderBusy;
+    els.batchResumeBtn.textContent = t('batchResume') + (unfinishedCount ? ' (' + unfinishedCount + ')' : '');
+  }
+
+  function clearBatchQueue() {
+    if (batchBusy || renderBusy) return;
+    batchItems = [];
+    batchCurrent = null;
+    renderBatchQueue();
+    void deleteBatchQueueRecord();
+  }
+
+  async function retryFailedBatch() {
+    if (renderBusy || batchBusy) return;
+    const failedItems = batchItems.filter((item) => item.status === 'failed');
+    if (!failedItems.length) return;
+    if (renderMode === 'browser' && !gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
+    for (const item of failedItems) {
+      item.status = 'pending';
+      item.percent = 0;
+      item.error = '';
+    }
+    renderBatchQueue();
+    schedulePersistBatchQueue();
+    await runBatch(failedItems.map((item) => item.entry), true, true);
+  }
+
+  async function resumeBatch() {
+    if (renderBusy || batchBusy) return;
+    const unfinished = batchItems.filter((item) => item.status === 'pending' || item.status === 'skipped');
+    if (!unfinished.length) return;
+    if (renderMode === 'browser' && !gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
+    for (const item of unfinished) {
+      item.status = 'pending';
+      item.percent = 0;
+      item.error = '';
+    }
+    renderBatchQueue();
+    schedulePersistBatchQueue();
+    await runBatch(unfinished.map((item) => item.entry), true, true);
+  }
+
   async function renderAll() {
     if (renderBusy || batchBusy) return;
     if (!maps.length) return;
     if (maps.length > MAX_BATCH) { setStatus('err', tf('batchTooMany', { n: MAX_BATCH })); return; }
     if (renderMode === 'browser' && !gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
+    await runBatch(maps.slice());
+  }
+
+  async function runBatch(entries, keepZip = false, preserveQueue = false) {
+    if ((!entries.length && !preserveQueue) || renderBusy || batchBusy) return;
     batchBusy = true;
     batchCancelled = false;
-    zipBlob = null;
+    batchSkipCurrent = false;
+    batchCurrent = null;
+    if (!keepZip) { zipBlob = null; batchZipEntries = []; }
+    if (!preserveQueue) batchItems = entries.map((entry, index) => ({ entry, index, status: 'pending', percent: 0 }));
+    renderBatchQueue();
     updateRenderButtons();
-    const entries = maps.slice();
-    const zipped = [];
-    let failed = 0;
+    schedulePersistBatchQueue();
+
+    const zipped = keepZip ? batchZipEntries.slice() : [];
+    const usedZipNames = new Set(zipped.map((z) => String(z.name).toLowerCase()));
+    let zipError = null;
     try {
-      for (let i = 0; i < entries.length; i++) {
+      for (const item of batchItems) {
         if (batchCancelled) break;
-        const entry = entries[i];
-        selectedMap = entry;
+        if (item.status !== 'pending') continue;
+        batchCurrent = item;
+        batchSkipCurrent = false;
+        item.status = 'rendering';
+        item.percent = 0;
+        item.error = '';
+        renderBatchQueue();
+        schedulePersistBatchQueue();
+
+        selectedMap = item.entry;
         renderMapList();
-        setStatus('work', tf('batchRendering', { i: i + 1, total: entries.length, name: entry.name }));
+        setStatus('work', tf('batchRendering', { i: item.index + 1, total: batchItems.length, name: item.entry.name }));
         lastRenderResult = null;
         if (renderMode === 'browser') await renderBrowser();
         else await renderServer();
+
         const result = lastRenderResult;
+        const wasSkipped = batchSkipCurrent || (result && result.cancelled);
+        if (wasSkipped) {
+          item.status = 'skipped';
+          item.percent = 0;
+          item.error = '';
+          renderBatchQueue();
+          schedulePersistBatchQueue();
+          await new Promise((r) => setTimeout(r, 0));
+          continue;
+        }
+
         if (result && result.ok) {
           let blob = result.blob;
           if (!blob && result.downloadUrl) {
@@ -1525,32 +2267,83 @@
               if (resp.ok) blob = await resp.blob();
             } catch (e) { /* count as failure below */ }
           }
-          if (blob) zipped.push({ name: result.name || entry.name, blob });
-          else failed++;
+          if (blob) {
+            let dims = { width: Number(result.width) || 0, height: Number(result.height) || 0 };
+            if (!dims.width || !dims.height) {
+              try { dims = await blobDimensions(blob); } catch (e) { dims = { width: 0, height: 0 }; }
+            }
+            const ext = blob.type === 'image/jpeg' || /\.jpe?g$/i.test(result.name || '') ? 'jpg' : 'png';
+            const zipName = uniqueZipName(zipEntryName(els.zipTemplate.value, item, dims, ext, result.engine), usedZipNames);
+            item.blob = blob;
+            item.outputName = zipName;
+            zipped.push({ name: zipName, blob });
+            item.status = 'ok';
+            item.percent = 100;
+            item.error = '';
+          } else {
+            item.status = 'failed';
+            item.error = t('bqResultMissing');
+          }
         } else {
-          failed++;
+          item.status = 'failed';
+          item.error = errorText(result && result.error);
         }
+        renderBatchQueue();
+        schedulePersistBatchQueue();
         await new Promise((r) => setTimeout(r, 0));
         if (batchCancelled) break;
       }
-      if (zipped.length) zipBlob = await window.createZipBlob(zipped);
       if (batchCancelled) {
+        for (const item of batchItems) {
+          if (item.status === 'pending') item.status = 'skipped';
+        }
+        renderBatchQueue();
+      }
+      if (zipped.length) {
+        batchZipEntries = zipped;
+        const previousZip = zipBlob;
+        try {
+          zipBlob = await window.createZipBlob(zipped);
+        } catch (e) {
+          zipError = e;
+          zipBlob = previousZip; // keep an older archive if a retry added files
+          appendLog(t('zipFailed') + ': ' + errorText(e), 'error');
+          openLog();
+        }
+      }
+      const okCount = batchItems.filter((item) => item.status === 'ok').length;
+      const failedCount = batchItems.filter((item) => item.status === 'failed').length;
+      const skippedCount = batchItems.filter((item) => item.status === 'skipped').length;
+      if (zipError) {
+        const msg = t('zipFailed') + ': ' + errorText(zipError);
+        setStatus('err', msg);
+        toast(msg, 'error');
+      } else if (batchCancelled) {
         setStatus('ok', t('batchCancelled'));
         toast(t('batchCancelled'), 'warn');
       } else {
-        const msg = failed
-          ? tf('batchDoneFail', { ok: zipped.length, fail: failed })
-          : tf('batchDone', { ok: zipped.length });
-        setStatus(zipped.length ? 'ok' : 'err', msg);
-        toast(msg, zipped.length ? 'ok' : 'error');
+        let msg = failedCount
+          ? tf('batchDoneFail', { ok: okCount, fail: failedCount })
+          : tf('batchDone', { ok: okCount });
+        if (skippedCount) msg += tf('batchSkippedSuffix', { n: skippedCount });
+        setStatus(okCount ? 'ok' : 'err', msg);
+        toast(msg, okCount ? 'ok' : 'error');
       }
     } catch (e) {
-      const msg = t('browserRenderFailed') + ': ' + (e && e.message || e);
+      const msg = errorText(e);
+      if (batchCurrent) { batchCurrent.status = 'failed'; batchCurrent.error = msg; }
       setStatus('err', msg);
       toast(msg, 'error');
     } finally {
+      if (batchCurrent && batchCurrent.status === 'rendering') {
+        batchCurrent.status = 'failed';
+        batchCurrent.error = t('renderFailed');
+      }
+      batchCurrent = null;
       batchBusy = false;
       updateRenderButtons();
+      renderBatchQueue();
+      schedulePersistBatchQueue();
     }
   }
 
@@ -1564,6 +2357,13 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  function engineFromArgs(args) {
+    const forced = (args || []).find((a) => a.startsWith('--force-'));
+    if (!forced) return 'AUTO';
+    const m = { ra2: 'RA2', yr: 'YR', ts: 'TS', fs: 'FS' };
+    return m[forced.replace('--force-', '')] || 'AUTO';
   }
 
   function argvShort(args) {
@@ -1587,27 +2387,229 @@
   const GAME_DB = 'cncmaps_web';
   const GAME_STORE = 'handles';
   const RENDER_STORE = 'renders';
+  const QUEUE_STORE = 'batchQueue';
+  const QUEUE_KEY = 'current';
   const GAME_HANDLE_KEY = 'gameDir';
-  const MAX_PERSIST_BYTES = 32 * 1024 * 1024;
+  const MAX_PERSIST_BYTES = 16 * 1024 * 1024;
   let savedDirHandle = null;
 
+  let dbPromise = null;
   function openGameDb() {
-    return new Promise((resolve, reject) => {
-      if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB unavailable')); return; }
-      const req = indexedDB.open(GAME_DB, 2);
+    if (dbPromise) return dbPromise;
+    if (typeof indexedDB === 'undefined') return Promise.reject(new Error('IndexedDB unavailable'));
+    const p = new Promise((resolve, reject) => {
+      const req = indexedDB.open(GAME_DB, 4);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(GAME_STORE)) db.createObjectStore(GAME_STORE);
-        if (!db.objectStoreNames.contains(RENDER_STORE)) db.createObjectStore(RENDER_STORE, { keyPath: 'id', autoIncrement: true });
+        let store;
+        if (!db.objectStoreNames.contains(RENDER_STORE)) {
+          store = db.createObjectStore(RENDER_STORE, { keyPath: 'id', autoIncrement: true });
+        } else {
+          store = req.transaction.objectStore(RENDER_STORE);
+        }
+        if (!db.objectStoreNames.contains(QUEUE_STORE)) db.createObjectStore(QUEUE_STORE, { keyPath: 'id' });
+        if (!store.indexNames.contains('createdAt')) {
+          store.createIndex('createdAt', 'createdAt');
+          // Version 2 records predate the index; give them a timestamp so history
+          // restore and trimming can see them instead of orphaning their blobs.
+          const cursorReq = store.openCursor();
+          cursorReq.onsuccess = () => {
+            const cursor = cursorReq.result;
+            if (!cursor) return;
+            const value = cursor.value;
+            if (!value.createdAt) {
+              value.createdAt = Date.now();
+              cursor.update(value);
+            }
+            cursor.continue();
+          };
+        }
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        const db = req.result;
+        db.onversionchange = () => { db.close(); dbPromise = null; };
+        resolve(db);
+      };
+      req.onerror = () => { dbPromise = null; reject(req.error); };
     });
+    // Reuse one connection for the whole session: the old code opened a new one
+    // per save/trim/delete call and never closed it.
+    dbPromise = p;
+    p.catch(() => { if (dbPromise === p) dbPromise = null; });
+    return p;
+  }
+
+  let queuePersistTimer = null;
+  let queueRevision = 0;
+
+  function queueEntryRecord(entry) {
+    return {
+      key: entry.key,
+      name: entry.name,
+      size: entry.size,
+      uploadToken: entry.uploadToken || null,
+      uploadedAt: entry.uploadedAt || null,
+      tokenExpiresAt: entry.tokenExpiresAt || null,
+      file: entry.file || null,
+    };
+  }
+
+  async function persistBatchQueue(revision) {
+    try {
+      const db = await openGameDb();
+      // A newer queue mutation (or a clear) superseded this snapshot while the
+      // DB connection was opening. Never write it back over newer state.
+      if (revision !== queueRevision) return;
+      if (!batchItems.length) {
+        await new Promise((resolve) => {
+          const tx = db.transaction(QUEUE_STORE, 'readwrite');
+          tx.objectStore(QUEUE_STORE).delete(QUEUE_KEY);
+          tx.oncomplete = resolve;
+          tx.onerror = resolve;
+        });
+        return;
+      }
+      const items = [];
+      let blobBytes = 0;
+      for (const item of batchItems) {
+        let blob = null;
+        if (item.status === 'ok' && item.blob && item.blob.size + blobBytes <= MAX_PERSIST_BYTES) {
+          blob = item.blob;
+          blobBytes += item.blob.size;
+        }
+        items.push({
+          entry: queueEntryRecord(item.entry),
+          status: item.status === 'ok' && !blob ? 'failed' : item.status,
+          percent: item.percent || 0,
+          error: item.status === 'ok' && !blob ? t('bqResultMissing') : (item.error || ''),
+          outputName: item.outputName || '',
+          blob,
+        });
+      }
+      const record = {
+        id: QUEUE_KEY,
+        updatedAt: Date.now(),
+        mode: renderMode,
+        template: els.zipTemplate.value,
+        items,
+      };
+      await new Promise((resolve) => {
+        const tx = db.transaction(QUEUE_STORE, 'readwrite');
+        tx.objectStore(QUEUE_STORE).put(record);
+        tx.oncomplete = resolve;
+        tx.onerror = resolve;
+      });
+    } catch (e) { /* queue persistence is best-effort */ }
+  }
+
+  function schedulePersistBatchQueue() {
+    const revision = ++queueRevision;
+    if (queuePersistTimer) clearTimeout(queuePersistTimer);
+    queuePersistTimer = setTimeout(() => {
+      queuePersistTimer = null;
+      void persistBatchQueue(revision);
+    }, 150);
+  }
+
+  async function deleteBatchQueueRecord() {
+    const revision = ++queueRevision;
+    if (queuePersistTimer) { clearTimeout(queuePersistTimer); queuePersistTimer = null; }
+    try {
+      const db = await openGameDb();
+      // A new queue may have started while this delete was opening the DB.
+      if (revision !== queueRevision) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction(QUEUE_STORE, 'readwrite');
+        tx.objectStore(QUEUE_STORE).delete(QUEUE_KEY);
+        tx.oncomplete = resolve;
+        tx.onerror = resolve;
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  async function restoreBatchQueue() {
+    try {
+      const db = await openGameDb();
+      const record = await new Promise((resolve, reject) => {
+        const tx = db.transaction(QUEUE_STORE, 'readonly');
+        const rq = tx.objectStore(QUEUE_STORE).get(QUEUE_KEY);
+        rq.onsuccess = () => resolve(rq.result || null);
+        rq.onerror = () => reject(rq.error);
+      });
+      if (!record || !Array.isArray(record.items) || !record.items.length) return;
+      if (record.mode) setRenderMode(record.mode);
+      if (record.template) els.zipTemplate.value = record.template;
+
+      const restored = [];
+      for (let i = 0; i < record.items.length; i++) {
+        const saved = record.items[i];
+        if (!saved || !saved.entry || !saved.entry.name) continue;
+        let entry = {
+          key: saved.entry.key,
+          name: saved.entry.name,
+          size: saved.entry.size || 0,
+          uploadToken: saved.entry.uploadToken || null,
+          uploadedAt: saved.entry.uploadedAt || null,
+          tokenExpiresAt: saved.entry.tokenExpiresAt || null,
+          file: saved.entry.file || null,
+        };
+        if (entry.file) {
+          entry.uploadToken = null;
+          entry.tokenExpiresAt = null;
+        }
+        const existing = maps.find((m) => m.key === entry.key || (m.name === entry.name && m.size === entry.size));
+        if (existing) entry = existing;
+        else maps.push(entry);
+
+        let status = saved.status === 'rendering' ? 'pending' : (saved.status || 'pending');
+        if (!['pending', 'ok', 'failed', 'skipped'].includes(status)) status = 'pending';
+        let blob = saved.blob || null;
+        let error = saved.error || '';
+        if (status === 'ok' && !blob) {
+          status = 'failed';
+          error = t('bqResultMissing');
+        }
+        if (status === 'failed' && !error) error = t('renderFailed');
+        restored.push({
+          entry,
+          index: i,
+          status,
+          percent: saved.percent || (status === 'ok' ? 100 : 0),
+          error,
+          blob,
+          outputName: saved.outputName || '',
+        });
+      }
+
+      batchItems = restored;
+      batchZipEntries = [];
+      for (const item of restored) {
+        if (item.status === 'ok' && item.blob) {
+          batchZipEntries.push({ name: item.outputName || item.entry.name, blob: item.blob });
+        }
+      }
+      if (batchZipEntries.length) {
+        try { zipBlob = await window.createZipBlob(batchZipEntries); } catch (e) { zipBlob = null; }
+      }
+      if (!selectedMap && maps.length) selectedMap = maps[0];
+      renderMapList();
+      els.infoMaps.textContent = t('mapsPrefix') + maps.length;
+      renderBatchQueue();
+      updateRenderButtons();
+      setStatus('ok', t('batchRestored'));
+    } catch (e) { /* ignore missing queue */ }
   }
 
   async function saveRenderRecord(name, blob, values) {
     if (!blob || blob.size > MAX_PERSIST_BYTES) return null;
     try {
+      // Estimating storage lets us skip persistence instead of filling the origin
+      // quota and making the transaction fail on every later render.
+      if (navigator.storage && navigator.storage.estimate) {
+        const est = await navigator.storage.estimate();
+        if (est.quota && (est.usage || 0) + blob.size > est.quota * 0.8) return null;
+      }
       const db = await openGameDb();
       const id = await new Promise((resolve, reject) => {
         const tx = db.transaction(RENDER_STORE, 'readwrite');
@@ -1624,21 +2626,30 @@
 
   async function trimRenderRecords(db) {
     try {
-      const records = await new Promise((resolve, reject) => {
-        const tx = db.transaction(RENDER_STORE, 'readonly');
-        const rq = tx.objectStore(RENDER_STORE).getAll();
-        rq.onsuccess = () => resolve(rq.result || []);
-        rq.onerror = () => reject(rq.error);
+      // getAll() loaded every full image blob (12 x 16 MB) just to find the oldest
+      // records. A key cursor returns index keys plus the record's primary key,
+      // which is what delete() needs (the index key is createdAt, not the id).
+      const tx = db.transaction(RENDER_STORE, 'readonly');
+      const index = tx.objectStore(RENDER_STORE).index('createdAt');
+      const keys = await new Promise((resolve, reject) => {
+        const req = index.openKeyCursor();
+        const out = [];
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return resolve(out);
+          out.push(cursor.primaryKey);
+          cursor.continue();
+        };
+        req.onerror = () => reject(req.error);
       });
-      records.sort((a, b) => b.createdAt - a.createdAt);
-      const extra = records.slice(MAX_HISTORY);
+      const extra = keys.slice(0, Math.max(0, keys.length - MAX_HISTORY));
       if (!extra.length) return;
       await new Promise((resolve) => {
-        const tx = db.transaction(RENDER_STORE, 'readwrite');
-        const store = tx.objectStore(RENDER_STORE);
-        for (const record of extra) store.delete(record.id);
-        tx.oncomplete = resolve;
-        tx.onerror = resolve;
+        const tx2 = db.transaction(RENDER_STORE, 'readwrite');
+        const store = tx2.objectStore(RENDER_STORE);
+        for (const id of extra) store.delete(id);
+        tx2.oncomplete = resolve;
+        tx2.onerror = resolve;
       });
     } catch (e) { /* ignore */ }
   }
@@ -1655,11 +2666,22 @@
   async function restoreRenderHistory() {
     try {
       const db = await openGameDb();
+      // Read at most MAX_HISTORY records, newest first, instead of materializing
+      // the whole blob store at startup.
       const records = await new Promise((resolve, reject) => {
         const tx = db.transaction(RENDER_STORE, 'readonly');
-        const rq = tx.objectStore(RENDER_STORE).getAll();
-        rq.onsuccess = () => resolve(rq.result || []);
-        rq.onerror = () => reject(rq.error);
+        const index = tx.objectStore(RENDER_STORE).index('createdAt');
+        const req = index.openCursor(null, 'prev');
+        const out = [];
+        let done = false;
+        const finish = () => { if (!done) { done = true; resolve(out); } };
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor || out.length >= MAX_HISTORY) return finish();
+          out.push(cursor.value);
+          cursor.continue();
+        };
+        req.onerror = () => reject(req.error);
       });
       records.sort((a, b) => a.createdAt - b.createdAt);
       for (const record of records.slice(-MAX_HISTORY)) {
@@ -1706,18 +2728,19 @@
 
   async function collectGameFiles(handle) {
     const files = [];
-    async function walk(dir) {
+    async function walk(dir, prefix) {
       for await (const entry of dir.values()) {
+        const rel = prefix ? prefix + '/' + entry.name : entry.name;
         if (entry.kind === 'file') {
           if (ASSET_RE.test(entry.name)) {
-            try { files.push(await entry.getFile()); } catch (e) { /* skip unreadable */ }
+            try { files.push({ path: rel, file: await entry.getFile() }); } catch (e) { /* skip unreadable */ }
           }
         } else if (entry.kind === 'directory') {
-          await walk(entry);
+          await walk(entry, rel);
         }
       }
     }
-    await walk(handle);
+    await walk(handle, '');
     return files;
   }
 
@@ -1738,8 +2761,10 @@
       void saveGameDir(handle);
       setStatus('work', t('readingGameDir'));
       const files = await collectGameFiles(handle);
-      if (!files.length) setStatus('err', t('assetNoFiles'));
-      else setLocalAssets(files);
+      if (!files.length) {
+        clearLocalAssets();
+        setStatus('err', t('assetNoFiles'));
+      } else setLocalAssets(files);
     } catch (e) {
       if (e && e.name === 'AbortError') return;
       setStatus('err', t('gameDirRestoreFail') + ': ' + (e && e.message || e));
@@ -1756,6 +2781,7 @@
       if (perm !== 'granted') return;
       const files = await collectGameFiles(handle);
       if (files.length) setLocalAssets(files);
+      else clearLocalAssets();
     } catch (e) { /* ignore a stale handle */ }
   }
 
@@ -1767,9 +2793,18 @@
   els.gameDirBtn.onclick = () => { void chooseGameDir(); };
   els.gameDirInput.addEventListener('change', () => {
     if (els.gameDirInput.files && els.gameDirInput.files.length) {
-      const files = Array.from(els.gameDirInput.files).filter((f) => ASSET_RE.test(f.name));
-      if (!files.length) setStatus('err', t('assetNoFiles'));
-      else setLocalAssets(files);
+      // webkitRelativePath starts with the picked folder name; strip it so the
+      // game root maps to /game, exactly like the File System Access walk.
+      const assets = Array.from(els.gameDirInput.files)
+        .filter((f) => ASSET_RE.test(f.name))
+        .map((f) => {
+          const parts = (f.webkitRelativePath || f.name).split('/');
+          return { path: parts.length > 1 ? parts.slice(1).join('/') : f.name, file: f };
+        });
+      if (!assets.length) {
+        clearLocalAssets();
+        setStatus('err', t('assetNoFiles'));
+      } else setLocalAssets(assets);
     }
     els.gameDirInput.value = '';
   });
@@ -1834,9 +2869,9 @@
           (els.lightboxBody.clientWidth - pad) / img.naturalWidth,
           (els.lightboxBody.clientHeight - pad) / img.naturalHeight,
         ));
-        applyZoom(false);
+        applyZoom();
         els.lightboxBody.scrollLeft = 0; els.lightboxBody.scrollTop = 0;
-      } else { zoom = 1; applyZoom(false); }
+      } else { zoom = 1; applyZoom(); }
     };
   });
   document.addEventListener('keydown', (e) => {
@@ -1856,6 +2891,9 @@
   els.renderAllBtn.onclick = () => { void renderAll(); };
   els.zipBtn.onclick = downloadZip;
   els.cancelBtn.onclick = cancelRender;
+  els.batchResumeBtn.onclick = () => { void resumeBatch(); };
+  els.batchRetryBtn.onclick = () => { void retryFailedBatch(); };
+  els.batchClearBtn.onclick = clearBatchQueue;
   els.clearMapsBtn.onclick = clearMaps;
   els.clearHistoryBtn.onclick = () => { void clearRenderHistory(); };
   els.logClearBtn.onclick = clearLog;
@@ -1867,6 +2905,7 @@
   });
   els.format.addEventListener('change', applyFormatFields);
   els.engine.addEventListener('change', setEngineTag);
+  els.cropEnable.addEventListener('change', syncCropInputs);
   els.presetSelect.addEventListener('change', () => {
     if (els.presetSelect.value === '') return;
     const preset = loadPresets()[Number(els.presetSelect.value)];
@@ -1880,10 +2919,14 @@
   applyLang();
   applyTheme();
   applyFormatFields();
+  syncCropInputs();
   populatePresets();
   updateRenderButtons();
-  void refreshServerHealth();
-  setInterval(() => { void refreshServerHealth(); }, 15000);
+  if (renderMode === 'server') void refreshServerHealth();
+  setInterval(() => {
+    if (renderMode === 'server' && !document.hidden) void refreshServerHealth();
+  }, 15000);
   void restoreRenderHistory();
+  void restoreBatchQueue();
   void restoreGameDir();
 })();

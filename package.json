@@ -12,9 +12,12 @@
     "build": "tsc -p tsconfig.json",
     "build:worker": "node scripts/build-worker.mjs",
     "build:all": "npm run build && npm run build:worker",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "cli": "node dist/cli.js",
-    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.test.js\"",
-    "web": "npm run build:worker && node src/web/server.mjs"
+    "test": "npm run build && node scripts/run-tests.mjs",
+    "web": "node scripts/web.mjs",
+    "web:serve": "node src/web/server.mjs",
+    "prepack": "npm run build:all && node scripts/clean-dist-package.mjs"
   },
   "license": "MIT",
   "devDependencies": {
@@ -23,5 +26,19 @@
     "esbuild": "^0.28.2",
     "pngjs": "^7.0.0",
     "typescript": "^7.0.2"
-  }
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "files": [
+    "dist",
+    "src/web/server.mjs",
+    "src/web/static",
+    "scripts/web.mjs",
+    "README.md",
+    "LICENSE"
+  ]
 }

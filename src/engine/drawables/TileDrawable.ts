@@ -29,6 +29,8 @@ export interface TileSetEntry {
 
 export class TileDrawable extends Drawable {
   TsEntry: TileSetEntry | null;
+  // TmpRenderer holds only the config, so one instance is enough for every tile.
+  private readonly _tmpRenderer: TmpRenderer;
 
   constructor(
     config: ModConfig,
@@ -39,6 +41,7 @@ export class TileDrawable extends Drawable {
   ) {
     super(config, vfs, rules, art);
     this.TsEntry = entry;
+    this._tmpRenderer = new TmpRenderer(config);
     if (entry != null)
       this.Name = entry.toString();
   }
@@ -49,8 +52,7 @@ export class TileDrawable extends Drawable {
     const tile = obj as MapTile;
     const tmpFile = this.TsEntry.GetTmpFile(tile);
     if (tmpFile != null) {
-      const renderer = new TmpRenderer(this._config);
-      renderer.Draw(tile as unknown as MapTileLike, tmpFile, ds);
+      this._tmpRenderer.Draw(tile as unknown as MapTileLike, tmpFile, ds);
 
       if (this.TsEntry.AnimationDrawable != null && this.TsEntry.AnimationSubtile === tile.SubTile) {
         this.TsEntry.AnimationDrawable.Draw(obj, ds, false);

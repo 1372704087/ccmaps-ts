@@ -20,3 +20,18 @@ test('honours the source rectangle', () => {
   const rgba = bgrToRgba(surface, new Rectangle(1, 0, 1, 1));
   assert.deepEqual(Array.from(rgba), [6, 5, 4, 255]);
 });
+
+test('converts only the requested rows for banded encoding', () => {
+  const data = new Uint8Array(2 * 3 * 3);
+  for (let i = 0; i < 18; i++) data[i] = i;
+  const surface = { data, Width: 2, BytesPerPixel: 3 };
+  const rgba = bgrToRgba(surface, new Rectangle(0, 0, 2, 3), 1, 2);
+  assert.equal(rgba.length, 2 * 2 * 4);
+  assert.deepEqual(Array.from(rgba.slice(0, 8)), [8, 7, 6, 255, 11, 10, 9, 255]);
+});
+
+test('an empty or out-of-range row band produces no pixels', () => {
+  const surface = { data: new Uint8Array(3), Width: 1, BytesPerPixel: 3 };
+  assert.equal(bgrToRgba(surface, new Rectangle(0, 0, 1, 1), 1, 1).length, 0);
+  assert.equal(bgrToRgba(surface, new Rectangle(0, 0, 0, 0)).length, 0);
+});

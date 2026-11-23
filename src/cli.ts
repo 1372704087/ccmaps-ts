@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node CLI entry point for cncmaps-ts.
-import { logger } from './shared/Log.js';
+import { logger, LogLevel } from './shared/Log.js';
 import { EngineResult } from './shared/Enums.js';
 import { RenderSettings } from './shared/RenderSettings.js';
 import { RenderEngine } from './engine/RenderEngine.js';
@@ -9,6 +9,7 @@ function main(): number {
   const args = process.argv.slice(2);
   const settings = new RenderSettings();
   settings.ConfigureFromArgs(args);
+  if (settings.Debug && !logger.isEnabled(LogLevel.Debug)) logger.setLevel(LogLevel.Debug);
 
   if (settings.ShowHelp || settings.InputFile === '') {
     console.log('CNCMaps TS - C&C map renderer');

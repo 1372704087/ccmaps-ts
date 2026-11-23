@@ -1,7 +1,7 @@
 // Port of CNCMaps.Engine.Game.Theater
 import { Size } from '../../shared/Geometry.js';
 import { EngineType, TheaterType, CollectionType, PaletteType } from '../../shared/Enums.js';
-import { logger } from '../../shared/Log.js';
+import { logger, LogLevel } from '../../shared/Log.js';
 import { ModConfig } from '../../shared/ModConfig.js';
 import { VirtualFileSystem } from '../../formats/vfs/VirtualFileSystem.js';
 import { IniFile, IniSection } from '../../formats/IniFile.js';
@@ -102,7 +102,6 @@ export class Theater {
     logger.info(`Initializing theater of type ${this._theaterType}`);
 
     if (!this._config.SetActiveTheater(this._theaterType)) return false;
-    Theater.Active = this;
 
     // load palettes and additional mix files for this theater
     const isoPal = this._vfs.open(ModConfig.ActiveTheater!.IsoPaletteName, FileFormat.Pal) as PalFile | null;
@@ -315,11 +314,9 @@ export class Theater {
   }
 
   Draw(obj: GameObject, ds: DrawingSurface): void {
-    logger.trace(`Drawing object ${obj} @ ${obj.Tile}`);
+    if (logger.isEnabled(LogLevel.Trace)) logger.trace(`Drawing object ${obj} @ ${obj.Tile}`);
     obj.Drawable?.Draw(obj, ds);
   }
-
-  static Active: Theater | null = null;
 }
 
 // minimal structural type to satisfy GetCollection without importing the abstract base

@@ -1,7 +1,7 @@
 // Port of CNCMaps.Engine.Rendering.ShpRenderer
 import { Point, Rectangle } from '../shared/Geometry.js';
 import { EngineType } from '../shared/Enums.js';
-import { logger } from '../shared/Log.js';
+import { logger, LogLevel } from '../shared/Log.js';
 import { Rand } from '../shared/Util.js';
 import { FileFormat } from '../formats/FileFormat.js';
 import { ShpFile, ShpImage } from '../formats/ShpFile.js';
@@ -173,9 +173,9 @@ export class ShpRenderer {
       offset.X -= idiv((obj.FoundationCell.X - obj.FoundationCell.Y) * this.config.TileWidth, 2);
       offset.Y -= idiv((obj.FoundationCell.X + obj.FoundationCell.Y) * this.config.TileHeight, 2);
     }
-    logger.trace(
-      `Drawing SHP file ${shp.fileName} (Frame ${frameIndex}) at (${offset.X},${offset.Y})`,
-    );
+    if (logger.isEnabled(LogLevel.Trace)) {
+      logger.trace(`Drawing SHP file ${shp.fileName} (Frame ${frameIndex}) at (${offset.X},${offset.Y})`);
+    }
 
     const stride = ds.Stride;
     const zBuffer = ds.getZBuffer();
@@ -359,9 +359,9 @@ export class ShpRenderer {
         ? RampHeight.pixelLiftTile(obj.Tile, this.config)
         : 0;
     offset.Y -= rampLift;
-    logger.trace(
-      `Drawing SHP shadow ${shp.fileName} (frame ${frameIndex}) at (${offset.X},${offset.Y})`,
-    );
+    if (logger.isEnabled(LogLevel.Trace)) {
+      logger.trace(`Drawing SHP shadow ${shp.fileName} (frame ${frameIndex}) at (${offset.X},${offset.Y})`);
+    }
 
     const stride = ds.Stride;
     const zBuffer = ds.getZBuffer();
@@ -482,9 +482,9 @@ export class ShpRenderer {
     const offset = props.GetOffset(obj);
     offset.X += idiv(obj.Tile.Dx * this.config.TileWidth, 2);
     offset.Y += idiv((obj.Tile.Dy - obj.Tile.Z) * this.config.TileHeight, 2);
-    logger.trace(
-      `Drawing AlphaImage SHP file ${shp.fileName} (frame ${frameIndex}) at (${offset.X},${offset.Y})`,
-    );
+    if (logger.isEnabled(LogLevel.Trace)) {
+      logger.trace(`Drawing AlphaImage SHP file ${shp.fileName} (frame ${frameIndex}) at (${offset.X},${offset.Y})`);
+    }
 
     const stride = ds.Stride;
     const data = ds.data;

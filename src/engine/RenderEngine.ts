@@ -149,19 +149,26 @@ export class RenderEngine {
     // downscale each strip into the preview straight away, so the canvas stays at strip size.
     const fullRect = renderer.GetFullMapSizePixels();
     const fullPixels = Math.max(1, fullRect.Width) * Math.max(1, fullRect.Height);
-    if (settings.MaxSurfacePixels > 0 && fullPixels > settings.MaxSurfacePixels) {
-      logger.fatal(
-        `Map surface needs ${fullPixels} pixels, above the ${settings.MaxSurfacePixels} limit; use server rendering`,
-      );
-      renderer.FreeUseless();
-      return EngineResult.SurfaceTooLarge;
-    }
     let bandHeight = settings.BandHeight;
-    if (bandHeight <= 0 && fullPixels > RenderEngine.DefaultBandThreshold && settings.PreviewWidth > 0) {
+    const bandTrigger = Math.min(
+      RenderEngine.DefaultBandThreshold,
+      settings.MaxSurfacePixels > 0 ? settings.MaxSurfacePixels : Number.POSITIVE_INFINITY,
+    );
+    if (bandHeight <= 0 && fullPixels > bandTrigger && settings.PreviewWidth > 0) {
       const budgetPixels = 32_000_000; // ~160 MB of pixels + depth per strip
       bandHeight = Math.min(4096, Math.max(512, Math.trunc(budgetPixels / Math.max(1, fullRect.Width))));
     }
     const banded = bandHeight > 0 && bandHeight < Math.max(1, fullRect.Height) && settings.PreviewWidth > 0;
+    // The cap protects the surface actually allocated. A banded preview only ever holds one strip,
+    // so a 500x500 map that would need a 2.2 GB full canvas is fine when it is downscaled band by band.
+    if (!banded && settings.MaxSurfacePixels > 0 && fullPixels > settings.MaxSurfacePixels) {
+      logger.fatal(
+        `Map surface needs ${fullPixels} pixels, above the ${settings.MaxSurfacePixels} limit; ` +
+          'set --preview-width to render a downscaled preview, or raise the limit',
+      );
+      renderer.FreeUseless();
+      return EngineResult.SurfaceTooLarge;
+    }
 
     if (banded) {
       let outPath = '';
@@ -169,13 +176,29 @@ export class RenderEngine {
         outPath = RenderEngine.resolveOutputPath(settings, mapName);
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
       }
-      const mapStats = settings.MetadataOutFile !== '' ? renderer.ComputeStats() : null;
+      const mapStats = settings.MetadataOutFile !== '' || settings.StatsSink != null ? renderer.ComputeStats() : null;
+      if (mapStats != null && settings.StatsSink != null) settings.StatsSink(mapStats);
       const save = settings.OutputSink
         ? (canvas: DrawingSurface) => settings.OutputSink!(canvas, new Rectangle(0, 0, canvas.Width, canvas.Height))
-        : (canvas: DrawingSurface) => canvas.savePNG(outPath, settings.PNGQuality, 0, 0, canvas.Width, canvas.Height);
-      const previewRect = RenderEngine.renderBandedPreview(renderer, settings, save, bandHeight);
+        : (canvas: DrawingSurface) =>
+            RenderEngine.saveImage(canvas, outPath, settings, new Rectangle(0, 0, canvas.Width, canvas.Height));
+      const previewLayout: { sourceRect?: Rectangle } = {};
+      const previewRect = RenderEngine.renderBandedPreview(renderer, settings, save, bandHeight, previewLayout);
+      if (previewRect.Width <= 0 || previewRect.Height <= 0) {
+        renderer.FreeUseless();
+        return EngineResult.SurfaceTooLarge;
+      }
       if (settings.MetadataOutFile !== '') {
-        RenderEngine.writeMetadataJson(settings.MetadataOutFile, resolvedName, mapFile, renderer, previewRect, mapStats, engine);
+        RenderEngine.writeMetadataJson(
+          settings.MetadataOutFile,
+          resolvedName,
+          mapFile,
+          renderer,
+          previewLayout.sourceRect ?? previewRect,
+          previewRect,
+          mapStats,
+          engine,
+        );
       }
       renderer.FreeUseless();
       return EngineResult.RenderedOk;
@@ -204,11 +227,18 @@ export class RenderEngine {
     if (settings.OutputSink == null) {
       outPath = RenderEngine.resolveOutputPath(settings, mapName);
     }
-    const saveRect = renderer.GetSizePixels(settings.SizeMode);
-    logger.debug(`size rect ${saveRect.Left},${saveRect.Top},${saveRect.Width}x${saveRect.Height}`);
-    saveRect.Intersect(new Rectangle(0, 0, renderer.GetDrawingSurface().Width, renderer.GetDrawingSurface().Height));
+    const sizeRect = renderer.GetSizePixels(settings.SizeMode);
+    logger.debug(`size rect ${sizeRect.Left},${sizeRect.Top},${sizeRect.Width}x${sizeRect.Height}`);
+    const surfaceBounds = new Rectangle(0, 0, renderer.GetDrawingSurface().Width, renderer.GetDrawingSurface().Height);
+    const saveRect = RenderEngine.applyOutputFraming(sizeRect, settings, surfaceBounds);
+    if (saveRect.Width <= 0 || saveRect.Height <= 0) {
+      logger.error('The crop/framing left an empty output rect');
+      renderer.FreeUseless();
+      return EngineResult.Exception;
+    }
     // stats need the rules, which FreeUseless disposes below
-    const mapStats = settings.MetadataOutFile !== '' ? renderer.ComputeStats() : null;
+    const mapStats = settings.MetadataOutFile !== '' || settings.StatsSink != null ? renderer.ComputeStats() : null;
+    if (mapStats != null && settings.StatsSink != null) settings.StatsSink(mapStats);
     if (settings.OutputSink == null) fs.mkdirSync(path.dirname(outPath), { recursive: true });
     const surface = renderer.GetDrawingSurface();
     let outputSurface = surface;
@@ -218,27 +248,67 @@ export class RenderEngine {
       const targetHeight = Math.max(1, Math.round((saveRect.Height * targetWidth) / saveRect.Width));
       outputSurface = resizeRegionBox(surface, saveRect, targetWidth, targetHeight);
       outputRect = new Rectangle(0, 0, targetWidth, targetHeight);
-      logger.info(`Downscaling saved PNG to ${targetWidth}x${targetHeight}`);
+      logger.info(`Downscaling saved image to ${targetWidth}x${targetHeight}`);
     }
     if (settings.OutputSink != null) {
       settings.OutputSink(outputSurface, outputRect);
     } else {
-      outputSurface.savePNG(
-        outPath,
-        settings.PNGQuality,
-        outputRect.Left,
-        outputRect.Top,
-        outputRect.Width,
-        outputRect.Height,
-      );
+      RenderEngine.saveImage(outputSurface, outPath, settings, outputRect);
       logger.info(`Saved ${outPath}`);
     }
 
     if (settings.MetadataOutFile !== '')
-      RenderEngine.writeMetadataJson(settings.MetadataOutFile, resolvedName, mapFile, renderer, saveRect, mapStats, engine);
+      RenderEngine.writeMetadataJson(
+        settings.MetadataOutFile,
+        resolvedName,
+        mapFile,
+        renderer,
+        saveRect,
+        outputRect,
+        mapStats,
+        engine,
+      );
 
     renderer.FreeUseless();
     return EngineResult.RenderedOk;
+  }
+
+  /// <summary>Applies the optional crop and aspect framing to a size rect. Crop values are
+  /// fractions of the rect, so a preset keeps working when Auto selects Local or Full.</summary>
+  static applyOutputFraming(rect: Rectangle, settings: RenderSettings, bounds?: Rectangle): Rectangle {
+    if (rect.Width <= 0 || rect.Height <= 0) return Rectangle.Empty;
+    const base = rect.Clone();
+    if (bounds != null) base.Intersect(bounds);
+    if (base.Width <= 0 || base.Height <= 0) return Rectangle.Empty;
+
+    const clamp01 = (n: number): number => Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
+    const x = clamp01(settings.CropX);
+    const y = clamp01(settings.CropY);
+    const w = clamp01(settings.CropWidth);
+    const h = clamp01(settings.CropHeight);
+    let left = base.Left + Math.round(base.Width * x);
+    let top = base.Top + Math.round(base.Height * y);
+    left = Math.min(base.Right - 1, Math.max(base.Left, left));
+    top = Math.min(base.Bottom - 1, Math.max(base.Top, top));
+    let width = Math.max(1, Math.round(base.Width * w));
+    let height = Math.max(1, Math.round(base.Height * h));
+    width = Math.min(width, base.Right - left);
+    height = Math.min(height, base.Bottom - top);
+
+    const ratios: Record<string, number> = { '1:1': 1, '4:5': 4 / 5, '16:9': 16 / 9, '9:16': 9 / 16 };
+    const target = ratios[settings.OutputAspect];
+    if (target != null && width > 0 && height > 0) {
+      if (width / height > target) {
+        const newWidth = Math.max(1, Math.round(height * target));
+        left += Math.trunc((width - newWidth) / 2);
+        width = newWidth;
+      } else if (width / height < target) {
+        const newHeight = Math.max(1, Math.round(width / target));
+        top += Math.trunc((height - newHeight) / 2);
+        height = newHeight;
+      }
+    }
+    return new Rectangle(left, top, Math.max(1, width), Math.max(1, height));
   }
 
   /// <summary>Above this many pixels (full canvas) a preview is drawn strip by strip.</summary>
@@ -246,7 +316,7 @@ export class RenderEngine {
 
   /// <summary>Draws the map in horizontal strips and downscales each strip straight into the
   /// preview image, so the peak canvas is one strip instead of the whole map.</summary>
-  static renderBandedPreview(renderer: MapRenderer, settings: RenderSettings, save: (canvas: DrawingSurface) => void, bandHeight: number): Rectangle {
+  static renderBandedPreview(renderer: MapRenderer, settings: RenderSettings, save: (canvas: DrawingSurface) => void, bandHeight: number, layout?: { sourceRect?: Rectangle }): Rectangle {
     // The preview is "the size-mode rect scaled to the requested width", exactly as the single
     // canvas path saves it. That rect is only final once every tile has been drawn (the local view
     // is trimmed by the cutoff row), so the strips are laid out against the full map and pasted
@@ -257,10 +327,22 @@ export class RenderEngine {
     // the cutoff row that trims the local view comes out of the tile pass, so a strip render has
     // to walk the tiles once on a throwaway surface before it can lay out the preview
     renderer.MeasureTileTouchState();
-    const sizeRect = renderer.GetSizePixels(settings.SizeMode);
+    const sizeRect = RenderEngine.applyOutputFraming(renderer.GetSizePixels(settings.SizeMode), settings, fullRect);
+    if (sizeRect.Width <= 0 || sizeRect.Height <= 0) {
+      logger.error('The crop/framing left an empty output rect');
+      return Rectangle.Empty;
+    }
+    if (layout) layout.sourceRect = sizeRect.Clone();
     const targetWidth = settings.PreviewWidth;
     const scale = targetWidth / Math.max(1, sizeRect.Width);
     const canvasHeight = Math.max(1, Math.round(sizeRect.Height * scale));
+    if (settings.MaxSurfacePixels > 0 && targetWidth * canvasHeight > settings.MaxSurfacePixels) {
+      logger.fatal(
+        `Preview surface would need ${targetWidth * canvasHeight} pixels, above the ${settings.MaxSurfacePixels} limit; ` +
+          'lower --preview-width or raise the limit',
+      );
+      return Rectangle.Empty;
+    }
     const canvas = new DrawingSurface(targetWidth, canvasHeight, SurfaceFormat.Bgr24);
     const originX = sizeRect.Left;
     const originY = sizeRect.Top;
@@ -312,12 +394,40 @@ export class RenderEngine {
     return new Rectangle(0, 0, canvas.Width, canvas.Height);
   }
 
-  /// <summary>Resolves the output .png file path from settings and map name.</summary>
+  /// <summary>Resolves the output image path (PNG unless JPEG was explicitly requested).</summary>
   static resolveOutputPath(settings: RenderSettings, mapName: string): string {
     const baseExt = path.extname(mapName);
     let outBase = settings.OutputFile !== '' ? settings.OutputFile : path.join(path.dirname(mapName), path.basename(mapName, baseExt));
     if (settings.OutputDir !== '') outBase = path.join(settings.OutputDir, path.basename(outBase));
-    return outBase.replace(/\.(png|jpg|jpeg)$/i, '') + '.png';
+    const ext = settings.SaveJPEG && !settings.SavePNG ? '.jpg' : '.png';
+    return outBase.replace(/\.(png|jpg|jpeg)$/i, '') + ext;
+  }
+
+  private static saveImage(
+    surface: DrawingSurface,
+    outPath: string,
+    settings: RenderSettings,
+    rect: Rectangle,
+  ): void {
+    if (settings.SaveJPEG && !settings.SavePNG) {
+      surface.saveJPEG(
+        outPath,
+        settings.JPEGCompression,
+        rect.Left,
+        rect.Top,
+        rect.Width,
+        rect.Height,
+      );
+    } else {
+      surface.savePNG(
+        outPath,
+        settings.PNGQuality,
+        rect.Left,
+        rect.Top,
+        rect.Width,
+        rect.Height,
+      );
+    }
   }
 
   private static stripPlayersFromName(mapName: string): string {
@@ -478,7 +588,8 @@ export class RenderEngine {
     resolvedName: string,
     mapFile: MapFile,
     map: MapRenderer,
-    saveRect: Rectangle,
+    sourceRect: Rectangle,
+    outputRect: Rectangle,
     stats: MapStats | null,
     engine: EngineType,
   ): void {
@@ -494,6 +605,8 @@ export class RenderEngine {
         for (const k of [...stats.TechStructureTypes.keys()].sort())
           techStructureTypes[k] = stats.TechStructureTypes.get(k)!;
 
+      const scaleX = sourceRect.Width > 0 ? outputRect.Width / sourceRect.Width : 1;
+      const scaleY = sourceRect.Height > 0 ? outputRect.Height / sourceRect.Height : 1;
       const meta = {
         name: RenderEngine.stripPlayersFromName(resolvedName).replace(/  /g, ' ').trim(),
         rawName: resolvedName,
@@ -505,21 +618,26 @@ export class RenderEngine {
         fullSize: { x: mapFile.FullSize.X, y: mapFile.FullSize.Y, width: mapFile.FullSize.Width, height: mapFile.FullSize.Height },
         localSize: { x: mapFile.LocalSize.X, y: mapFile.LocalSize.Y, width: mapFile.LocalSize.Width, height: mapFile.LocalSize.Height },
         startPositions,
-        renderedWidth: saveRect.Width,
-        renderedHeight: saveRect.Height,
+        renderedWidth: outputRect.Width,
+        renderedHeight: outputRect.Height,
         // Everything needed to map a cell to a pixel in the saved image:
         //   Dx = Rx - Ry + fullSize.width - 1        Dy = Rx + Ry - fullSize.width - 1
-        //   x  = Dx * tileWidth / 2      - saveRect.x
-        //   y  = (Dy - z) * tileHeight/2 - saveRect.y
-        // saveRect is the crop taken out of the drawing surface; without its origin the
-        // surface coordinates above cannot be converted to saved-image coordinates.
-        saveRect: { x: saveRect.X, y: saveRect.Y, width: saveRect.Width, height: saveRect.Height },
+        //   x  = Dx * tileWidth / 2      - sourceRect.x
+        //   y  = (Dy - z) * tileHeight/2 - sourceRect.y
+        // sourceRect is the crop taken out of the drawing surface; without its origin the
+        // surface coordinates above cannot be converted to saved-image coordinates. If the
+        // image was downscaled to previewWidth, apply scaleX/scaleY to get output pixels.
+        saveRect: { x: sourceRect.X, y: sourceRect.Y, width: sourceRect.Width, height: sourceRect.Height },
+        renderScale: { x: scaleX, y: scaleY },
         tileWidth: map.TileWidth,
         tileHeight: map.TileHeight,
         startPositionPixels: map.GetStartPositionPixels().map((sp) => ({
           number: sp.Number,
           cell: { x: sp.Rx, y: sp.Ry, z: sp.Z },
-          pixel: { x: sp.X - saveRect.X, y: sp.Y - saveRect.Y },
+          pixel: {
+            x: Math.round((sp.X - sourceRect.X) * scaleX),
+            y: Math.round((sp.Y - sourceRect.Y) * scaleY),
+          },
           surfacePixel: { x: sp.X, y: sp.Y },
         })),
         terrain:

@@ -10,7 +10,8 @@
 (function () {
   try {
     var saved = localStorage.getItem('cncmaps_theme');
-    document.documentElement.dataset.cncmapsTheme = (saved === 'light' || saved === 'dark')
+    var valid = ['dark', 'light', 'terminal', 'holo', 'paper', 'contrast', 'cyber', 'soviet', 'frost', 'sunset'];
+    document.documentElement.dataset.cncmapsTheme = valid.indexOf(saved) !== -1
       ? saved
       : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   } catch (e) { /* theme is optional */ }
@@ -21,6 +22,10 @@
 <body>
 <div class="glow glow-a"></div>
 <div class="glow glow-b"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="bg-sweep" aria-hidden="true"></div>
+<div class="bg-dust" aria-hidden="true"></div>
+<div id="themeVeil" class="theme-veil" aria-hidden="true"></div>
 
 <header class="topbar">
   <div class="brand">
@@ -31,7 +36,10 @@
     </div>
   </div>
   <div class="topbar-right">
-    <button id="themeBtn" class="theme-btn" type="button" aria-label="切换明暗主题">☀️</button>
+    <div class="theme-wrap">
+      <button id="themeBtn" class="theme-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="切换主题" title="切换主题"><span class="theme-dot" aria-hidden="true"></span></button>
+      <div id="themeMenu" class="theme-menu" role="listbox" aria-label="主题" hidden></div>
+    </div>
     <button id="langBtn" class="lang-btn">🌐 English</button>
     <div class="engine-tag" id="engineTag">引擎 · 自动</div>
   </div>
@@ -68,6 +76,11 @@
       <div class="mi-body" id="mapInfoBody"></div>
     </details>
 
+    <details class="map-analysis" id="mapAnalysis" hidden>
+      <summary class="ma-head"><span data-i18n="analysisTitle">渲染统计</span><span class="ma-summary" id="mapAnalysisSummary"></span></summary>
+      <div class="ma-body" id="mapAnalysisBody"></div>
+    </details>
+
     <div id="gameResSection">
       <label class="field-label" id="resLabel" data-i18n="resLabel">游戏资源（选择本机游戏目录，不上传）</label>
       <div class="row">
@@ -90,14 +103,14 @@
 
     <div class="grid2">
       <div class="field">
-        <label data-i18n="lblFormat">输出格式</label>
+        <label for="format" data-i18n="lblFormat">输出格式</label>
         <select id="format">
           <option value="png" selected>PNG</option>
           <option value="jpg">JPEG</option>
         </select>
       </div>
       <div class="field">
-        <label data-i18n="lblEngine">引擎</label>
+        <label for="engine" data-i18n="lblEngine">引擎</label>
         <select id="engine">
           <option value="" selected data-i18n="engineAuto">自动检测</option>
           <option value="yr" data-i18n="engineYR">尤里的复仇 (YR)</option>
@@ -110,7 +123,7 @@
 
     <div class="grid2">
       <div class="field">
-        <label data-i18n="lblSizeMode">尺寸模式</label>
+        <label for="sizeMode" data-i18n="lblSizeMode">尺寸模式</label>
         <select id="sizeMode">
           <option value="" selected data-i18n="sizeAuto">自动</option>
           <option value="local" data-i18n="sizeLocal">局部 (LocalSize)</option>
@@ -118,7 +131,7 @@
         </select>
       </div>
       <div class="field">
-        <label data-i18n="lblPreviewWidth">预览宽度</label>
+        <label for="previewWidth" data-i18n="lblPreviewWidth">预览宽度</label>
         <select id="previewWidth">
           <option value="0" selected data-i18n="previewOriginal">原始尺寸</option>
           <option value="1024">1024</option>
@@ -129,12 +142,37 @@
     </div>
 
     <div class="grid2">
+      <div class="field">
+        <label for="aspect" data-i18n="lblAspect">画幅</label>
+        <select id="aspect">
+          <option value="" selected data-i18n="aspectFree">原始比例</option>
+          <option value="1:1">1:1</option>
+          <option value="4:5">4:5</option>
+          <option value="16:9">16:9</option>
+          <option value="9:16">9:16</option>
+        </select>
+      </div>
+      <div class="field">
+        <label data-i18n="lblCrop">区域裁剪</label>
+        <label class="toggle crop-toggle"><input type="checkbox" id="cropEnable"><span class="tk"></span><span data-i18n="cropEnable">启用</span></label>
+      </div>
+    </div>
+
+    <div class="crop-inputs" id="cropInputs" hidden>
+      <label><span>X %</span><input id="cropX" type="number" min="0" max="100" step="1" value="0"></label>
+      <label><span>Y %</span><input id="cropY" type="number" min="0" max="100" step="1" value="0"></label>
+      <label><span data-i18n="cropWidth">宽 %</span><input id="cropWidth" type="number" min="1" max="100" step="1" value="100"></label>
+      <label><span data-i18n="cropHeight">高 %</span><input id="cropHeight" type="number" min="1" max="100" step="1" value="100"></label>
+    </div>
+    <div class="crop-hint" id="cropHint" hidden data-i18n="cropHint">裁剪区域相对当前尺寸的百分比</div>
+
+    <div class="grid2">
       <div class="field" id="pngCompressionField">
-        <label><span data-i18n="lblPngComp">PNG 压缩</span> <span id="pngCompressionVal">4</span></label>
+        <label for="pngCompression"><span data-i18n="lblPngComp">PNG 压缩</span> <span id="pngCompressionVal">4</span></label>
         <input id="pngCompression" type="range" min="1" max="9" value="4">
       </div>
       <div class="field" id="jpegQualityField" style="display:none">
-        <label><span data-i18n="lblJpegQuality">JPEG 质量</span> <span id="jpegQualityVal">95</span></label>
+        <label for="jpegQuality"><span data-i18n="lblJpegQuality">JPEG 质量</span> <span id="jpegQualityVal">95</span></label>
         <input id="jpegQuality" type="range" min="1" max="100" value="95">
       </div>
     </div>
@@ -142,6 +180,54 @@
     <div class="toggles">
       <label class="toggle"><input type="checkbox" id="markStartPos"><span class="tk"></span><span data-i18n="tglStartPos">标记出生点</span></label>
       <label class="toggle"><input type="checkbox" id="markOre"><span class="tk"></span><span data-i18n="tglOre">高亮矿石</span></label>
+    </div>
+
+    <details class="advanced-options" id="advancedOptions">
+      <summary class="ao-head" data-i18n="advancedTitle">高级渲染</summary>
+      <div class="ao-body">
+        <div class="grid2">
+          <div class="field">
+            <label for="markerShape" data-i18n="lblMarkerShape">出生点形状</label>
+            <select id="markerShape">
+              <option value="squared" selected data-i18n="markerSquared">方块</option>
+              <option value="circled" data-i18n="markerCircled">圆形</option>
+              <option value="diamond" data-i18n="markerDiamond">菱形</option>
+              <option value="ellipsed" data-i18n="markerEllipsed">椭圆</option>
+              <option value="star" data-i18n="markerStar">星形</option>
+              <option value="tiled" data-i18n="markerTiled">平铺</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="markerSize" data-i18n="lblMarkerSize">标记大小</label>
+            <input id="markerSize" type="number" min="2" max="6" step="1" value="4">
+          </div>
+        </div>
+        <div class="toggles advanced-toggles">
+          <label class="toggle"><input type="checkbox" id="tunnelPaths"><span class="tk"></span><span data-i18n="tglTunnels">隧道路径</span></label>
+          <label class="toggle"><input type="checkbox" id="tunnelPosition"><span class="tk"></span><span data-i18n="tglTunnelPos">隧道位置偏移</span></label>
+          <label class="toggle"><input type="checkbox" id="iceGrowth"><span class="tk"></span><span data-i18n="tglIce">冰面增长</span></label>
+          <label class="toggle"><input type="checkbox" id="compressTiles"><span class="tk"></span><span data-i18n="tglCompressTiles">压缩瓦片</span></label>
+          <label class="toggle"><input type="checkbox" id="fixOverlays"><span class="tk"></span><span data-i18n="tglFixOverlays">修复覆盖物</span></label>
+          <label class="toggle"><input type="checkbox" id="fixTiles"><span class="tk"></span><span data-i18n="tglFixTiles">修复瓦片</span></label>
+          <label class="toggle"><input type="checkbox" id="noExpandMixes"><span class="tk"></span><span data-i18n="tglNoExpandMixes">不展开 MIX</span></label>
+          <label class="toggle"><input type="checkbox" id="ignoreLighting"><span class="tk"></span><span data-i18n="tglIgnoreLighting">忽略光照</span></label>
+        </div>
+        <div class="field zip-template-field">
+          <label data-i18n="lblZipTemplate">ZIP 文件名模板</label>
+          <input id="zipTemplate" type="text" spellcheck="false" value="{map}_{engine}_{width}x{height}.{ext}">
+          <div class="crop-hint" data-i18n="zipTemplateHint">变量：{map} {engine} {width} {height} {index} {ext}，重名会自动加序号</div>
+        </div>
+      </div>
+    </details>
+
+    <div class="batch-queue" id="batchQueue" hidden>
+      <div class="bq-head">
+        <span data-i18n="batchQueueTitle">批量队列</span>
+        <button type="button" id="batchResumeBtn" class="mini-link" hidden data-i18n="batchResume">继续未完成</button>
+        <button type="button" id="batchRetryBtn" class="mini-link" hidden data-i18n="batchRetryFailed">重试失败</button>
+        <button type="button" id="batchClearBtn" class="mini-link" data-i18n="batchClear">关闭</button>
+      </div>
+      <div class="bq-list" id="batchQueueList"></div>
     </div>
 
     <div class="render-zone">
@@ -223,7 +309,7 @@
         <button class="zbtn" data-zoom="fit" title="适应窗口" data-i18n-title="zoomFit">适应</button>
         <button class="zbtn" data-zoom="1" title="实际大小" data-i18n-title="zoom100">100%</button>
       </div>
-      <a class="btn btn-primary" id="lightboxDownload" href="#" download>⬇ 下载原图</a>
+      <a class="btn btn-primary" id="lightboxDownload" href="#" download data-i18n="downloadOriginal">⬇ 下载原图</a>
     </div>
   </div>
 </div>

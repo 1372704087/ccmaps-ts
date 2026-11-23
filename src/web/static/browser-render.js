@@ -91,7 +91,8 @@
 
     setAssets(files) {
       return new Promise((resolve, reject) => {
-        const list = Array.from(files || []).map((f) => ({ path: f.name, file: f }));
+        const list = Array.from(files || []).map((f) =>
+          f && f.file ? { path: f.path || f.file.name, file: f.file } : { path: f.name, file: f });
         const timer = setTimeout(() => {
           this.assetWaiter = null;
           reject(new Error('Assets mount timed out'));

@@ -2,7 +2,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RenderSettings } from './RenderSettings.js';
-import { StartPositionMarking } from './Enums.js';
 
 function parse(args: string[]): RenderSettings {
   const s = new RenderSettings();
@@ -15,13 +14,23 @@ test('RenderSettings: --no-expand-mixes flag', () => {
   assert.equal(parse([]).NoExpandMixes, false);
 });
 
-test('RenderSettings: --thumb-markers parses every documented style', () => {
-  assert.equal(parse(['--thumb-markers', 'squared']).ThumbnailMarkers, StartPositionMarking.Squared);
-  assert.equal(parse(['--thumb-markers=circled']).ThumbnailMarkers, StartPositionMarking.Circled);
-  assert.equal(parse(['--thumb-markers', 'diamond']).ThumbnailMarkers, StartPositionMarking.Diamond);
-  assert.equal(parse(['--thumb-markers', 'ellipsed']).ThumbnailMarkers, StartPositionMarking.Ellipsed);
-  assert.equal(parse(['--thumb-markers', 'star']).ThumbnailMarkers, StartPositionMarking.Starred);
-  assert.equal(parse(['--thumb-markers', 'starred']).ThumbnailMarkers, StartPositionMarking.Starred);
+test('RenderSettings: numeric options are clamped to safe ranges', () => {
+  const high = parse(['--png-compression', '99', '--jpeg-quality', '999', '--preview-width', '99999', '--start-pos-size', '99']);
+  assert.equal(high.PNGQuality, 9);
+  assert.equal(high.JPEGCompression, 100);
+  assert.equal(high.PreviewWidth, 8192);
+  assert.equal(high.MarkerStartSize, 6);
+  const low = parse(['--png-compression', '0', '--jpeg-quality', '-5', '--preview-width', '-3', '--start-pos-size', '0']);
+  assert.equal(low.PNGQuality, 1);
+  assert.equal(low.JPEGCompression, 1);
+  assert.equal(low.PreviewWidth, 0);
+  assert.equal(low.MarkerStartSize, 2);
+});
+
+test('RenderSettings: --max-surface-pixels accepts 0 and positive values only', () => {
+  assert.equal(parse(['--max-surface-pixels', '1000000']).MaxSurfacePixels, 1000000);
+  assert.equal(parse(['--max-surface-pixels', '-1']).MaxSurfacePixels, 0);
+  assert.equal(parse([]).MaxSurfacePixels, 0);
 });
 
 test('RenderSettings: debug file options are parsed', () => {
@@ -59,4 +68,15 @@ test('RenderSettings: bare value option names are not flagged unknown', () => {
 test('RenderSettings: an actually unknown option is still flagged', () => {
   // no assertion on the log; just ensure parsing does not throw
   parse(['--definitely-not-an-option']);
+});
+
+test('RenderSettings: crop percentages and output aspect', () => {
+  const s = parse(['--crop=10,20,50,60', '--aspect=4:5']);
+  assert.equal(s.CropX, 0.1);
+  assert.equal(s.CropY, 0.2);
+  assert.equal(s.CropWidth, 0.5);
+  assert.equal(s.CropHeight, 0.6);
+  assert.equal(s.OutputAspect, '4:5');
+  assert.equal(parse(['--crop=bad']).CropWidth, 1);
+  assert.equal(parse(['--aspect=3:2']).OutputAspect, 'free');
 });

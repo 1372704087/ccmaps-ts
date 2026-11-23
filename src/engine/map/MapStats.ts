@@ -26,6 +26,46 @@ export class MapStats {
   HasBridges = false;
 
   TechStructureTypes = new Map<string, number>();
+
+  /** Plain object with the same shape the CLI metadata JSON uses for stats. */
+  toPlainObject(): {
+    terrain: Record<string, number>;
+    resources: Record<string, number>;
+    objects: Record<string, unknown>;
+  } {
+    const techStructureTypes: Record<string, number> = {};
+    for (const [name, count] of [...this.TechStructureTypes.entries()].sort(([a], [b]) => a.localeCompare(b)))
+      techStructureTypes[name] = count;
+    return {
+      terrain: {
+        heightMin: this.HeightMin,
+        heightMax: this.HeightMax,
+        totalTiles: this.TotalTiles,
+        waterTiles: this.WaterTiles,
+        shoreTiles: this.ShoreTiles,
+        cliffTiles: this.CliffTiles,
+        rampTiles: this.RampTiles,
+      },
+      resources: {
+        oreCells: this.OreCells,
+        gemCells: this.GemCells,
+        totalCredits: this.TotalCredits,
+        oreSpawners: this.OreSpawners,
+      },
+      objects: {
+        structures: this.Structures,
+        techStructures: this.TechStructures,
+        techStructureTypes,
+        garrisonableStructures: this.GarrisonableStructures,
+        terrainObjects: this.TerrainObjects,
+        units: this.Units,
+        infantry: this.Infantry,
+        aircraft: this.Aircraft,
+        smudges: this.Smudges,
+        hasBridges: this.HasBridges,
+      },
+    };
+  }
 }
 
 /// <summary>A start waypoint in both cell and drawing-surface pixel coordinates, exported via

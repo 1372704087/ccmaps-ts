@@ -1,7 +1,7 @@
 // cncmaps-ts local web UI backend.
 // Minimal Node http server (no external deps). Serves the static frontend,
 // accepts uploaded maps, and runs the renderer CLI as a child process,
-// streaming progress back as a NDJSON/SSE stream and the result image URL.
+// streaming progress back as a NDJSON stream and the result image URL.
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -26,39 +26,180 @@ const GAME_DIRS = (process.env.CNCMAPS_GAME_DIRS || '')
   .filter((s) => s !== '');
 if (GAME_DIRS.length === 0 && process.env.CNCMAPS_GAME_DIR) GAME_DIRS.push(process.env.CNCMAPS_GAME_DIR);
 const CLI_JS = path.join(ROOT, 'dist', 'cli.js');
-const PORT = Number(process.env.CNCMAPS_WEB_PORT || 5173);
+const PORT = clampInt(process.env.CNCMAPS_WEB_PORT, 1, 65535, 5173);
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+// JSON control bodies are tiny; without a cap any local page can make the server
+// buffer an arbitrary body in memory.
+const MAX_BODY_BYTES = 256 * 1024;
+// Refuse renders whose full canvas would not fit. Downscaled (banded) previews
+// only allocate one strip, so this applies only when no preview width is set.
+const MAX_SURFACE_PIXELS = clampInt(process.env.CNCMAPS_MAX_SURFACE_PIXELS, 0, Number.MAX_SAFE_INTEGER, 200_000_000);
+const MAX_RENDER_JOBS = clampInt(process.env.CNCMAPS_MAX_RENDER_JOBS, 1, 16, 2);
+const RENDER_TIMEOUT_MS = clampInt(process.env.CNCMAPS_RENDER_TIMEOUT_MS, 60_000, 6 * 60 * 60 * 1000, 30 * 60 * 1000);
+const UPLOAD_TTL_MS = 60 * 60 * 1000;
+const UPLOAD_MAX_FILES = 200;
+const UPLOAD_MAX_TOTAL_BYTES = clampInt(process.env.CNCMAPS_MAX_UPLOAD_BYTES, 64 * 1024 * 1024, 16 * 1024 * 1024 * 1024, 1024 * 1024 * 1024);
+const IMAGE_TTL_MS = 30 * 60 * 1000;
+const IMAGE_MAX = 16;
+const IMAGE_MAX_BYTES = clampInt(process.env.CNCMAPS_IMAGE_CACHE_BYTES, 16 * 1024 * 1024, 4 * 1024 * 1024 * 1024, 256 * 1024 * 1024);
+const RENDER_QUEUE_MAX = clampInt(process.env.CNCMAPS_RENDER_QUEUE_MAX, 1, 1024, 64);
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(SCRATCH_DIR, { recursive: true });
+
+function clampInt(value, min, max, fallback) {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function httpError(statusCode, message) {
+  const e = new Error(message);
+  e.statusCode = statusCode;
+  return e;
+}
 
 // Uploaded maps: token -> { file, name, at }
 const mapTokens = new Map();
-const UPLOAD_TTL_MS = 60 * 60 * 1000;
 function mapTokenPut(token, data) { mapTokens.set(token, data); }
 function mapTokenGet(token) {
   const e = mapTokens.get(token);
   if (!e) return null;
-  if (Date.now() - e.at > UPLOAD_TTL_MS) { mapTokens.delete(token); try { fs.unlinkSync(e.file); } catch { /* ignore */ } return null; }
+  if (Date.now() - e.at > UPLOAD_TTL_MS) {
+    mapTokens.delete(token);
+    try { fs.unlinkSync(e.file); } catch { /* ignore */ }
+    return null;
+  }
   return e;
+}
+
+function removeUploadFile(file) {
+  try { fs.unlinkSync(file); } catch { /* ignore */ }
+}
+
+/** A file evicted by the count/TTL sweep must not leave a token pointing at it. */
+function dropTokensForFile(file) {
+  for (const [token, e] of mapTokens) if (e.file === file) mapTokens.delete(token);
+}
+
+/** Delete expired uploads and files left behind by earlier runs. The old server only
+ * removed a file when its token was looked up, so an upload that was never rendered
+ * stayed on disk forever (and across restarts). */
+function activeUploadFiles() {
+  const inUse = new Set();
+  for (const job of renderQueue) if (job.uploadFile) inUse.add(job.uploadFile);
+  for (const job of renderJobs.values()) if (job.uploadFile) inUse.add(job.uploadFile);
+  return inUse;
+}
+
+function sweepUploads() {
+  const now = Date.now();
+  const inUse = activeUploadFiles();
+  for (const [token, e] of mapTokens) {
+    if (now - e.at > UPLOAD_TTL_MS && !inUse.has(e.file)) {
+      mapTokens.delete(token);
+      removeUploadFile(e.file);
+    }
+  }
+  let files = [];
+  try {
+    files = fs.readdirSync(UPLOAD_DIR)
+      .filter((f) => /\.(map|yrm|mpr)$/i.test(f))
+      .map((f) => {
+        const full = path.join(UPLOAD_DIR, f);
+        let mtime = now;
+        try { mtime = fs.statSync(full).mtimeMs; } catch { /* ignore */ }
+        return { full, mtime };
+      });
+  } catch { /* ignore unreadable dir */ }
+  const stale = new Set(files.filter((f) => now - f.mtime > UPLOAD_TTL_MS && !inUse.has(f.full)));
+  for (const f of stale) {
+    removeUploadFile(f.full);
+    dropTokensForFile(f.full);
+  }
+  files = files.filter((f) => !stale.has(f)).sort((a, b) => a.mtime - b.mtime);
+  while (files.length > UPLOAD_MAX_FILES) {
+    let old = files.shift();
+    if (inUse.has(old.full)) {
+      // Protect a file an in-flight render still reads; retry from the next oldest.
+      files.push(old);
+      const next = files.find((f) => !inUse.has(f.full));
+      if (!next) break;
+      old = next;
+      files.splice(files.indexOf(next), 1);
+    }
+    removeUploadFile(old.full);
+    dropTokensForFile(old.full);
+  }
+}
+
+/** Remove per-job scratch directories left behind by a killed server. A live
+ * server deletes its own job dir on completion/cancel; only stale dirs are removed
+ * so two servers sharing the default temp root do not delete each other's jobs. */
+function sweepScratch() {
+  const now = Date.now();
+  const inUse = new Set();
+  for (const job of renderQueue) if (job.jobDir) inUse.add(job.jobDir);
+  for (const job of renderJobs.values()) if (job.jobDir) inUse.add(job.jobDir);
+  let entries = [];
+  try { entries = fs.readdirSync(SCRATCH_DIR, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(SCRATCH_DIR, entry.name);
+    if (inUse.has(full)) continue;
+    try {
+      if (now - fs.statSync(full).mtimeMs > UPLOAD_TTL_MS) fs.rmSync(full, { recursive: true, force: true });
+    } catch { /* ignore */ }
+  }
+}
+
+function uploadDirBytes() {
+  let total = 0;
+  try {
+    for (const name of fs.readdirSync(UPLOAD_DIR)) {
+      try { total += fs.statSync(path.join(UPLOAD_DIR, name)).size; } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  return total;
 }
 
 // In-memory rendered images: token -> { buffer, name, mime, at }
 const imageCache = new Map();
-const IMAGE_TTL_MS = 30 * 60 * 1000;
-const IMAGE_MAX = 16;
+let imageCacheBytes = 0;
+function cacheDelete(token) {
+  const old = imageCache.get(token);
+  if (old) {
+    imageCacheBytes -= old.buffer.length;
+    imageCache.delete(token);
+  }
+}
 function cachePut(token, data) {
-  imageCache.delete(token);
+  cacheDelete(token);
   imageCache.set(token, data);
+  imageCacheBytes += data.buffer.length;
   while (imageCache.size > IMAGE_MAX) {
     const oldest = imageCache.keys().next().value;
-    imageCache.delete(oldest);
+    cacheDelete(oldest);
+  }
+  // Keep one oversized image so a legitimate large render can still be
+  // downloaded; normal entries are evicted oldest-first.
+  while (imageCacheBytes > IMAGE_MAX_BYTES && imageCache.size > 1) {
+    const oldest = imageCache.keys().next().value;
+    cacheDelete(oldest);
   }
 }
 function cacheGet(token) {
   const e = imageCache.get(token);
   if (!e) return null;
-  if (Date.now() - e.at > IMAGE_TTL_MS) { imageCache.delete(token); return null; }
+  if (Date.now() - e.at > IMAGE_TTL_MS) { cacheDelete(token); return null; }
   return e;
+}
+function sweepImageCache() {
+  const now = Date.now();
+  for (const token of imageCache.keys()) {
+    const e = imageCache.get(token);
+    if (e && now - e.at > IMAGE_TTL_MS) cacheDelete(token);
+  }
 }
 
 const MIME = {
@@ -78,24 +219,57 @@ const MAP_EXTS = ['.map', '.yrm', '.mpr'];
 
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(body);
+  try {
+    res.writeHead(code, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(body);
+  } catch { /* client already gone */ }
 }
 
-function readBody(req) {
+/** RFC 5987 Content-Disposition. Node throws on non-Latin-1 header values, so a
+ * Chinese map name used to make /download/<token> return 500. */
+function contentDisposition(name, mime) {
+  const ext = mime === 'image/jpeg' ? '.jpg' : '.png';
+  const base = name.endsWith(ext) ? name.slice(0, -ext.length) : name;
+  const fallback = (base || 'map').replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') + ext;
+  const encoded = encodeURIComponent(base || 'map')
+    .replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase()) + ext;
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+function readBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', (c) => (data += c));
+    let size = 0;
+    let done = false;
+    const fail = (statusCode, message) => {
+      if (done) return;
+      done = true;
+      req.removeAllListeners('data');
+      req.resume(); // discard the rest without buffering it
+      reject(httpError(statusCode, message));
+    };
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) return fail(413, 'Request body too large');
+      data += c;
+    });
     req.on('end', () => {
+      if (done) return;
+      done = true;
       try {
         // Strip a UTF-8 BOM if present so JSON.parse doesn't choke on it.
         const raw = data.replace(/^\uFEFF/, '');
         resolve(raw ? JSON.parse(raw) : {});
-      } catch (e) {
-        reject(new Error('Invalid JSON body'));
+      } catch {
+        reject(httpError(400, 'Invalid JSON body'));
       }
     });
-    req.on('error', reject);
+    req.on('error', (e) => {
+      if (!done) { done = true; reject(e); }
+    });
   });
 }
 
@@ -103,49 +277,78 @@ function readRawBody(req, limit = MAX_UPLOAD_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let done = false;
+    const fail = () => {
+      if (done) return;
+      done = true;
+      req.removeAllListeners('data');
+      req.resume();
+      reject(httpError(413, 'File too large'));
+    };
     req.on('data', (c) => {
       size += c.length;
-      if (size > limit) { reject(new Error('File too large')); req.destroy(); return; }
+      if (size > limit) return fail();
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (done) return;
+      done = true;
+      resolve(Buffer.concat(chunks));
+    });
+    req.on('error', (e) => {
+      if (!done) { done = true; reject(e); }
+    });
   });
 }
 
+function safeDisplayName(name) {
+  const base = path.basename(String(name || '').replace(/\\/g, '/')) || 'map.map';
+  return base;
+}
+
 function buildArgs(p) {
-  const args = [CLI_JS];
-
-  // Resolve the uploaded map by token.
-  if (!p.uploadToken) throw new Error('Missing map file');
+  if (!p.uploadToken) throw httpError(400, 'Missing map file');
   const m = mapTokenGet(p.uploadToken);
-  if (!m) throw new Error('Uploaded map expired or not found');
+  if (!m) throw httpError(410, 'Uploaded map expired or not found; upload it again');
   const infile = m.file;
-  const displayName = m.name;
+  const displayName = safeDisplayName(m.name);
 
-  args.push('--infile=' + infile);
+  const token = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  const jobDir = path.join(SCRATCH_DIR, token);
+  fs.mkdirSync(jobDir, { recursive: true });
+
+  const args = [CLI_JS, '--infile=' + infile, '--outdir=' + jobDir];
+  // A stable output stem inside a per-job directory: two concurrent renders of
+  // the same upload token used to write and delete each other's <token>.png.
+  args.push('--outfile=render');
 
   // mixdir(s): server-side game copies only. Client game folders are never
   // uploaded in server mode; browser-local rendering handles those.
   for (const d of GAME_DIRS) args.push('--mixdir=' + d);
-
-  const outdir = SCRATCH_DIR;
-  fs.mkdirSync(outdir, { recursive: true });
-  args.push('--outdir=' + outdir);
+  if (MAX_SURFACE_PIXELS > 0) args.push('--max-surface-pixels=' + MAX_SURFACE_PIXELS);
 
   const fmt = p.format === 'jpg' ? 'jpg' : 'png';
-  args.push('--output-' + fmt);
-  if (fmt === 'png' && p.pngCompression) args.push('--png-compression=' + p.pngCompression);
-  if (fmt === 'jpg' && p.jpegQuality) args.push('--jpeg-quality=' + p.jpegQuality);
+  args.push(fmt === 'jpg' ? '--output-jpg' : '--output-png');
+  const pngLevel = clampInt(p.pngCompression, 1, 9, 4);
+  const jpegQuality = clampInt(p.jpegQuality, 1, 100, 92);
+  if (fmt === 'png') args.push('--png-compression=' + pngLevel);
+  else args.push('--jpeg-quality=' + jpegQuality);
 
   switch (p.sizeMode) {
     case 'local': args.push('--force-localsize'); break;
     case 'full': args.push('--force-fullmap'); break;
     default: break; // auto
   }
-  if (Number.isInteger(p.previewWidth) && p.previewWidth > 0) {
-    args.push('--preview-width=' + p.previewWidth);
+  const previewWidth = clampInt(p.previewWidth, 0, 8192, 0);
+  if (previewWidth > 0) args.push('--preview-width=' + previewWidth);
+  if (p.crop && typeof p.crop === 'object') {
+    const x = clampInt(p.crop.x, 0, 100, 0);
+    const y = clampInt(p.crop.y, 0, 100, 0);
+    const w = clampInt(p.crop.width, 1, 100, 100);
+    const h = clampInt(p.crop.height, 1, 100, 100);
+    args.push('--crop=' + [x, y, w, h].join(','));
   }
+  if (['1:1', '4:5', '16:9', '9:16'].includes(p.aspect)) args.push('--aspect=' + p.aspect);
   switch (p.engine) {
     case 'ra2': args.push('--force-ra2'); break;
     case 'yr': args.push('--force-yr'); break;
@@ -153,28 +356,50 @@ function buildArgs(p) {
     case 'fs': args.push('--force-fs'); break;
     default: break; // auto
   }
-  if (p.markStartPos) {
-    args.push('--start-pos-squared'); // give the checkbox a visible marker shape
+  if (p.markStartPos === true) {
+    const shapeFlags = {
+      squared: '--start-pos-squared', circled: '--start-pos-circled',
+      diamond: '--start-pos-diamond', ellipsed: '--start-pos-ellipsed',
+      star: '--start-pos-star', tiled: '--start-pos-tiled',
+    };
+    const shape = String(p.markerShape || 'squared');
+    args.push(Object.prototype.hasOwnProperty.call(shapeFlags, shape) ? shapeFlags[shape] : '--start-pos-squared');
     args.push('--mark-start-pos');
+    const markerSize = clampInt(p.markerSize, 2, 6, 4);
+    args.push('--start-pos-size=' + markerSize);
   }
-  if (p.markOre) args.push('--mark-ore');
+  if (p.markOre === true) args.push('--mark-ore');
+  if (p.tunnelPaths === true) args.push('--tunnels');
+  if (p.tunnelPosition === true) args.push('--tunnelpos');
+  if (p.markIceGrowth === true) args.push('--icegrowth');
+  if (p.compressTiles === true) args.push('--cmprs-tiles');
+  if (p.fixOverlays === true) args.push('--fix-overlays');
+  if (p.fixupTiles === true) args.push('--fixup-tiles');
+  if (p.noExpandMixes === true) args.push('--no-expand-mixes');
+  if (p.ignoreLighting === true) args.push('--ignore-lighting');
   args.push('--progress'); // emit progress:N:phase lines for the UI
+  const metaFile = path.join(jobDir, 'meta.json');
+  args.push('--meta-json=' + metaFile);
 
-  // The CLI derives the output filename from the *infile* basename (so for an
-  // uploaded file the on-disk output ends up <token>.png); the friendly
-  // download name stays the original map name.
-  const outBase = path.basename(infile).replace(/\.(map|yrm|mpr)$/i, '');
   const ext = fmt === 'jpg' ? '.jpg' : '.png';
-  const outFile = path.join(outdir, outBase + ext);
-  const friendlyBase = path.basename(displayName).replace(/\.(map|yrm|mpr)$/i, '');
-  const token = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  const outFile = path.join(jobDir, 'render' + ext);
+  const friendlyBase = displayName.replace(/\.(map|yrm|mpr)$/i, '') || 'map';
   return {
-    args, fmt, outFile, token, name: friendlyBase + ext, mime: fmt === 'jpg' ? 'image/jpeg' : 'image/png',
-    url: '/image/' + token, downloadUrl: '/download/' + token,
+    args,
+    jobDir,
+    fmt,
+    outFile,
+    metaFile,
+    uploadFile: infile,
+    token,
+    engine: p.engine || 'auto',
+    name: friendlyBase + ext,
+    mime: fmt === 'jpg' ? 'image/jpeg' : 'image/png',
+    url: '/image/' + token,
+    downloadUrl: '/download/' + token,
   };
 }
 
-const MAX_RENDER_JOBS = Math.max(1, Number(process.env.CNCMAPS_MAX_RENDER_JOBS || 2));
 let activeRenderJobs = 0;
 const renderQueue = [];
 const renderJobs = new Map();
@@ -201,6 +426,11 @@ function pumpRenderQueue() {
   sendQueuePositions();
 }
 
+function cleanupJobDir(job) {
+  if (!job.jobDir) return;
+  try { fs.rmSync(job.jobDir, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
 function finishRenderJob(job, event) {
   if (job.finished) return;
   job.finished = true;
@@ -208,6 +438,7 @@ function finishRenderJob(job, event) {
   const idx = renderQueue.indexOf(job);
   if (idx !== -1) renderQueue.splice(idx, 1);
   renderJobs.delete(job.id);
+  if (job.child == null) cleanupJobDir(job);
   if (!job.clientGone) {
     try {
       if (event) job.wnd(event);
@@ -231,21 +462,32 @@ function streamRender(req, res, params) {
   if (!params.uploadToken) {
     return sendJson(res, 400, { error: 'Missing map uploadToken' });
   }
+  if (!fs.existsSync(CLI_JS)) {
+    return sendJson(res, 503, { error: 'Engine is not built. Run `npm run build:all` before starting the web UI.' });
+  }
+  // Bound the pending queue as well as the active jobs. Without this a client
+  // can hold arbitrarily many jobs (and uploaded map files) in memory.
+  if (renderQueue.length >= RENDER_QUEUE_MAX) {
+    return sendJson(res, 429, { error: `Render queue is full (${RENDER_QUEUE_MAX}); retry shortly` });
+  }
   let job;
   try {
     job = buildArgs(params);
   } catch (e) {
-    return sendJson(res, 400, { error: String(e && e.message || e) });
+    return sendJson(res, e.statusCode || 400, { error: String(e && e.message || e) });
   }
 
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
     'Cache-Control': 'no-cache',
     'X-Accel-Buffering': 'no',
+    'X-Content-Type-Options': 'nosniff',
   });
 
   const record = {
     id: job.token,
+    jobDir: job.jobDir,
+    uploadFile: job.uploadFile,
     res,
     started: false,
     finished: false,
@@ -254,15 +496,19 @@ function streamRender(req, res, params) {
     child: null,
     onStart: start,
     wnd(obj) {
-      if (this.clientGone) return;
+      if (this.clientGone || res.writableEnded) return;
       try { res.write(JSON.stringify(obj) + '\n'); } catch { /* ignore */ }
     },
   };
   renderJobs.set(record.id, record);
   record.wnd({ type: 'job', id: record.id });
 
-  req.on('close', () => {
-    if (record.finished) return;
+  // 'close' on IncomingMessage fires when the request is complete, not when the
+  // client disconnects (verified on Node 22). The response close event is the
+  // one that means "tab closed / network dropped"; the old listener left the
+  // child rendering and a job slot occupied after a tab was closed.
+  res.on('close', () => {
+    if (record.finished || res.writableEnded) return;
     record.clientGone = true;
     cancelRenderJob(record);
   });
@@ -276,7 +522,7 @@ function streamRender(req, res, params) {
       finishRenderJob(record, { type: 'done', ok: false, cancelled: true });
       return;
     }
-    record.wnd({ type: 'start', url: job.url, name: job.name, args: job.args.slice(1) });
+    record.wnd({ type: 'start', url: job.url, name: job.name, engine: job.engine });
     let child;
     try {
       child = spawn(process.execPath, job.args, { cwd: ROOT });
@@ -286,6 +532,12 @@ function streamRender(req, res, params) {
     }
     record.child = child;
     let outBuf = '';
+    const timeout = setTimeout(() => {
+      record.timedOut = true;
+      record.wnd({ type: 'log', level: 'fatal', message: `Render timed out after ${RENDER_TIMEOUT_MS / 1000}s` });
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    }, RENDER_TIMEOUT_MS);
+    timeout.unref?.();
 
     child.stdout.on('data', (d) => {
       outBuf += d.toString('utf8');
@@ -305,37 +557,85 @@ function streamRender(req, res, params) {
     });
 
     child.on('error', (e) => {
+      clearTimeout(timeout);
       record.child = null;
       finishRenderJob(record, { type: 'error', message: String(e.message || e) });
     });
     child.on('close', (code) => {
+      clearTimeout(timeout);
       record.child = null;
+      void finishChild(code);
+    });
+
+    async function finishChild(code) {
       if (record.cancelled) {
-        try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
+        cleanupJobDir(record);
         finishRenderJob(record, { type: 'done', ok: false, cancelled: true });
         return;
       }
       const ok = code === 0 && fs.existsSync(job.outFile);
       if (ok) {
-        // Load into memory, then remove the transient file so nothing persists
-        // to a local directory.
-        cachePut(job.token, { buffer: fs.readFileSync(job.outFile), name: job.name, mime: job.mime, at: Date.now() });
-        try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
-        finishRenderJob(record, { type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name });
+        try {
+          const buffer = await fs.promises.readFile(job.outFile);
+          let meta = null;
+          try {
+            if (job.metaFile && fs.existsSync(job.metaFile)) {
+              meta = JSON.parse(await fs.promises.readFile(job.metaFile, 'utf8'));
+            }
+          } catch { /* metadata is optional */ }
+          cachePut(job.token, { buffer, name: job.name, mime: job.mime, at: Date.now() });
+          cleanupJobDir(record);
+          finishRenderJob(record, { type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name, meta });
+        } catch (e) {
+          cleanupJobDir(record);
+          finishRenderJob(record, { type: 'error', message: String(e && e.message || e) });
+        }
       } else {
-        try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
-        finishRenderJob(record, { type: 'done', ok: false, code, message: 'Render exited with code ' + code });
+        cleanupJobDir(record);
+        const message = record.timedOut
+          ? `Render timed out after ${RENDER_TIMEOUT_MS / 1000} seconds`
+          : 'Render exited with code ' + code;
+        finishRenderJob(record, { type: 'done', ok: false, code, message });
       }
-    });
+    }
   }
 }
 
+function hostNameOf(host) {
+  return String(host || '')
+    .toLowerCase()
+    .replace(/^\[([^\]]+)\](?::\d+)?$/, '$1')
+    .replace(/:\d+$/, '');
+}
+
+/** Blocks DNS-rebinding and cross-site POSTs to the local server. Requests without
+ * an Origin (curl, same-origin GET) are allowed as long as the Host is loopback. */
+function isTrustedRequest(req) {
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!['127.0.0.1', 'localhost', '::1'].includes(hostNameOf(host))) return false;
+  const origin = req.headers.origin;
+  if (origin) {
+    try {
+      const u = new URL(origin);
+      return u.host.toLowerCase() === host && ['127.0.0.1', 'localhost', '::1'].includes(hostNameOf(u.hostname));
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 function serveStatic(req, res, urlPath) {
-  const safe = path
-    .normalize(decodeURIComponent(urlPath))
-    .replace(/^(\.\.[/\\])+/, '');
+  let safe;
+  try {
+    safe = path.normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, '');
+    if (safe.includes('\0')) throw new Error('NUL in path');
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Bad path');
+  }
   let file = path.join(STATIC_DIR, safe);
-  if (!file.startsWith(STATIC_DIR)) {
+  if (!file.startsWith(STATIC_DIR + path.sep) && file !== STATIC_DIR) {
     res.writeHead(403);
     return res.end('Forbidden');
   }
@@ -347,13 +647,21 @@ function serveStatic(req, res, urlPath) {
     return res.end('Not found');
   }
   const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
-  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   fs.createReadStream(file).pipe(res);
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
+  let url;
   try {
+    url = new URL(req.url || '/', 'http://localhost');
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Bad request URL');
+  }
+  try {
+    if (!isTrustedRequest(req)) return sendJson(res, 403, { error: 'Forbidden origin' });
+
     if (req.method === 'GET' && url.pathname === '/api/health') {
       let validDirs = 0;
       let mixFiles = 0;
@@ -372,21 +680,44 @@ const server = http.createServer(async (req, res) => {
         gameDirsValid: validDirs,
         mixFiles,
         maxRenderJobs: MAX_RENDER_JOBS,
+        maxSurfacePixels: MAX_SURFACE_PIXELS,
+        maxQueuedRenders: RENDER_QUEUE_MAX,
+        uploadBytes: uploadDirBytes(),
+        maxUploadBytes: UPLOAD_MAX_TOTAL_BYTES,
+        imageCacheBytes,
+        maxImageCacheBytes: IMAGE_MAX_BYTES,
         activeRenderJobs,
         queuedRenders: renderQueue.length,
       });
     }
     if (req.method === 'POST' && url.pathname === '/api/upload') {
-      const fn = (req.headers['x-filename'] && decodeURIComponent(req.headers['x-filename'])) || 'map.map';
+      let fn = 'map.map';
+      const header = req.headers['x-filename'];
+      if (header) {
+        try { fn = safeDisplayName(decodeURIComponent(header)); }
+        catch { return sendJson(res, 400, { error: 'Invalid X-Filename header' }); }
+      }
       const ext = path.extname(fn).toLowerCase();
       if (!MAP_EXTS.includes(ext)) return sendJson(res, 400, { error: '仅支持 .map / .yrm / .mpr 文件' });
       const buf = await readRawBody(req);
       if (!buf.length) return sendJson(res, 400, { error: '空文件' });
+      sweepUploads();
+      if (uploadDirBytes() + buf.length > UPLOAD_MAX_TOTAL_BYTES) {
+        return sendJson(res, 413, { error: 'Upload storage limit reached; wait for old uploads to expire or clear them' });
+      }
       const token = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
       const file = path.join(UPLOAD_DIR, token + ext);
       fs.writeFileSync(file, buf);
-      mapTokenPut(token, { file, name: path.basename(fn), at: Date.now() });
-      return sendJson(res, 200, { token, name: path.basename(fn), size: buf.length });
+      const uploadedAt = Date.now();
+      mapTokenPut(token, { file, name: fn, at: uploadedAt });
+      sweepUploads();
+      return sendJson(res, 200, {
+        token,
+        name: fn,
+        size: buf.length,
+        uploadedAt,
+        expiresAt: uploadedAt + UPLOAD_TTL_MS,
+      });
     }
     if (req.method === 'POST' && url.pathname === '/api/render') {
       const body = await readBody(req);
@@ -399,16 +730,19 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: !!job });
     }
     if (req.method === 'GET' && (url.pathname.startsWith('/image/') || url.pathname.startsWith('/download/'))) {
-      const token = decodeURIComponent(url.pathname.split('/').pop() || '');
+      let token;
+      try { token = decodeURIComponent(url.pathname.split('/').pop() || ''); }
+      catch { return sendJson(res, 400, { error: 'Invalid image token' }); }
       const e = cacheGet(token);
       if (!e) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Image expired or not found'); }
       const headers = {
         'Content-Type': e.mime,
         'Content-Length': e.buffer.length,
         'Cache-Control': 'private, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
       };
       if (url.pathname.startsWith('/download/')) {
-        headers['Content-Disposition'] = 'attachment; filename="' + e.name.replace(/["\\]/g, '_') + '"';
+        headers['Content-Disposition'] = contentDisposition(e.name, e.mime);
       }
       res.writeHead(200, headers);
       return res.end(e.buffer);
@@ -416,7 +750,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET') return serveStatic(req, res, url.pathname);
     res.writeHead(405); res.end('Method not allowed');
   } catch (e) {
-    sendJson(res, 500, { error: String(e && e.message || e) });
+    const code = e && e.statusCode ? e.statusCode : 500;
+    if (!res.headersSent) sendJson(res, code, { error: String(e && e.message || e) });
+    else try { res.end(); } catch { /* client gone */ }
   }
 });
 
@@ -424,7 +760,33 @@ const server = http.createServer(async (req, res) => {
 server.requestTimeout = 30 * 60 * 1000;
 server.headersTimeout = 60 * 1000;
 
-fs.mkdirSync(SCRATCH_DIR, { recursive: true });
+sweepUploads();
+sweepScratch();
+setInterval(() => { sweepUploads(); sweepImageCache(); sweepScratch(); }, 10 * 60 * 1000).unref();
+
+function shutdown(signal) {
+  for (const job of [...renderQueue, ...renderJobs.values()]) {
+    if (job.child) try { job.child.kill('SIGKILL'); } catch { /* ignore */ }
+    cleanupJobDir(job);
+  }
+  console.log(`\n  ${signal}: stopping web UI`);
+  process.exit(0);
+}
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+
+server.on('error', (e) => {
+  console.error(`Failed to start web UI: ${e.message}`);
+  process.exitCode = 1;
+});
+
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`\n  CNCMaps TS Web UI running at http://127.0.0.1:${PORT}\n  Scratch dir: ${SCRATCH_DIR}\n  Images are served from memory (not persisted).\n`);
+  console.log(
+    `\n  CNCMaps TS Web UI running at http://127.0.0.1:${PORT}\n` +
+    `  Scratch dir: ${SCRATCH_DIR}\n` +
+    `  Upload dir: ${UPLOAD_DIR} (max ${UPLOAD_MAX_FILES} files, ${UPLOAD_TTL_MS / 60000} min TTL, ${UPLOAD_MAX_TOTAL_BYTES / 1024 / 1024} MB total)\n` +
+    `  Max render surface: ${MAX_SURFACE_PIXELS} pixels; queue max ${RENDER_QUEUE_MAX}\n` +
+    `  Render timeout: ${RENDER_TIMEOUT_MS / 60000} min\n` +
+    `  Images are served from memory (not persisted; cache ${IMAGE_MAX} items / ${IMAGE_MAX_BYTES / 1024 / 1024} MB).\n`,
+  );
 });

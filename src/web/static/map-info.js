@@ -34,12 +34,16 @@
     const sections = parseSections(text);
     const basic = sections.get('basic') || new Map();
     const map = sections.get('map') || new Map();
+    // [Map] Size is "left,top,width,height"; older/odd maps may only carry
+    // "width,height", so fall back to the first pair for those.
     const size = String(map.get('size') || '').split(',');
+    const width = number(size.length >= 4 ? size[2] : size[0]);
+    const height = number(size.length >= 4 ? size[3] : size[1]);
     return {
       name: basic.get('name') || '',
       author: basic.get('author') || '',
-      width: number(size[0]),
-      height: number(size[1]),
+      width,
+      height,
       players: number(basic.get('maxplayers')),
       theater: map.get('theater') || '',
     };

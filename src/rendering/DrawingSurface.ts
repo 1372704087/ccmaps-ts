@@ -7,6 +7,7 @@
 import { Rectangle } from '../shared/Geometry.js';
 import { logger } from '../shared/Log.js';
 import { PngWriter } from './PngWriter.js';
+import { JpegWriter } from './JpegWriter.js';
 
 export enum SurfaceFormat {
   Bgr24 = 0,
@@ -129,10 +130,15 @@ export class DrawingSurface {
   savePNG(path: string, compressionLevel: number, left: number, top: number, width: number, height: number): void {
     const rect = new Rectangle(left, top, width, height);
     rect.Intersect(new Rectangle(0, 0, this.Width, this.Height));
+    if (rect.Width <= 0 || rect.Height <= 0) throw new Error('Cannot write an empty PNG');
     logger.info(
       `Saving PNG to ${path}, compression level ${compressionLevel}, clip @(${rect.Left},${rect.Top};${rect.Width}x${rect.Height})`,
     );
     PngWriter.save(path, this.data, this.Width, this.BytesPerPixel, rect, compressionLevel);
+  }
+
+  saveJPEG(path: string, quality: number, left: number, top: number, width: number, height: number): void {
+    JpegWriter.save(this, path, left, top, width, height, quality);
   }
 
   // The surface is always directly addressable now; kept for call-site compatibility.

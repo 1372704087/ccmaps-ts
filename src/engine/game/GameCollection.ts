@@ -53,7 +53,7 @@ export abstract class GameCollection {
 
   GetDrawable(o: GameObject): Drawable | null;
   GetDrawable(name: string): Drawable | null;
-  GetDrawable(index: number): Drawable;
+  GetDrawable(index: number): Drawable | null;
   GetDrawable(o: GameObject | string | number): Drawable | null {
     if (typeof o === 'object' && o !== null) {
       if (o instanceof NamedObject) return this.GetDrawable((o as NamedObject).Name);
@@ -63,6 +63,9 @@ export abstract class GameCollection {
       }
       return null;
     } else if (typeof o === 'number') {
+      // A malformed map can reference an object index past the collection; returning null here
+      // turns that into a skipped object instead of a crash inside LoadDrawable.
+      if (!Number.isInteger(o) || o < 0 || o >= this._drawables.length) return null;
       const ret = this._drawables[o];
       if (!this._drawableLoaded.get(ret)) {
         this._drawableLoaded.set(ret, true);

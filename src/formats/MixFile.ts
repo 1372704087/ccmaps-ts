@@ -14,6 +14,10 @@ export enum MixFileFlags {
 }
 
 const standardNames = new Map<number, string>();
+// VFS.open() asks every archive whether it contains the same filename, so the CRC of one name
+// was recomputed dozens of times per lookup. Cache the uppercase name -> hash (bounded).
+const hashCache = new Map<string, number>();
+const HASH_CACHE_LIMIT = 4096;
 
 export class MixEntry {
   readonly hash: number;
@@ -33,7 +37,11 @@ export class MixEntry {
   }
 
   static hashFilename(filename: string): number {
-    let f = filename.toUpperCase();
+    const key = filename.toUpperCase();
+    const cached = hashCache.get(key);
+    if (cached !== undefined) return cached;
+
+    let f = key;
     const l = f.length;
     const a = l >> 2;
     if ((l & 3) !== 0) {
@@ -43,7 +51,10 @@ export class MixEntry {
     }
     const bytes = new Uint8Array(f.length);
     for (let i = 0; i < f.length; i++) bytes[i] = f.charCodeAt(i) & 0xff;
-    return CRC32.CalculateCrc(bytes);
+    const hash = CRC32.CalculateCrc(bytes);
+    if (hashCache.size >= HASH_CACHE_LIMIT) hashCache.delete(hashCache.keys().next().value as string);
+    hashCache.set(key, hash);
+    return hash;
   }
 
   static readonly SIZE = 12;

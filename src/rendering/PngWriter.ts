@@ -5,10 +5,16 @@
 // Scanlines are compressed in bounded chunks and written as multiple IDAT blocks,
 // so a full-map render never materializes the whole decompressed PNG body in RAM.
 import * as fs from 'node:fs';
-import { constants as zlibConstants, deflateRawSync } from 'node:zlib';
+// Namespace import: zlib.crc32 only exists on Node >=20.15/22. A named import
+// of a missing built-in export fails at module load on Node 18, taking the whole
+// CLI down before the feature check can fall back to the JS CRC.
+import * as zlib from 'node:zlib';
 import { Rectangle } from '../shared/Geometry.js';
 
 const crcTable = buildCrcTable();
+type Crc32Fn = (data: Uint8Array, value?: number) => number;
+const nativeCrc32 = (zlib as unknown as { crc32?: Crc32Fn }).crc32;
+const hasNativeCrc = typeof nativeCrc32 === 'function';
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 /** Rows per compression chunk; the raw buffer stays a few MiB even for huge maps. */
 const MAX_RAW_CHUNK = 4 * 1024 * 1024;
@@ -44,6 +50,10 @@ export class PngWriter {
     rect: Rectangle,
     compressionLevel: number,
   ): void {
+    // API callers can bypass the CLI parser; zlib throws RangeError outside 0..9.
+    const level = Number.isFinite(compressionLevel)
+      ? Math.min(9, Math.max(0, Math.trunc(compressionLevel)))
+      : 4;
     const fd = fs.openSync(path, 'w');
     try {
       fs.writeSync(fd, PNG_SIGNATURE);
@@ -57,7 +67,7 @@ export class PngWriter {
 
       // One zlib stream split over multiple IDAT chunks: the header goes in the
       // first block, the Adler-32 trailer in the last one.
-      const zlibHeader = Buffer.from([0x78, compressionLevel === 0 ? 0x01 : 0x9c]);
+      const zlibHeader = Buffer.from([0x78, level === 0 ? 0x01 : 0x9c]);
       const rowBytes = rect.Width * 3;
       const rowsPerChunk = Math.max(1, Math.min(rect.Height, Math.floor(MAX_RAW_CHUNK / (rowBytes + 1))));
       let adlerA = 1;
@@ -91,12 +101,12 @@ export class PngWriter {
         adlerB %= 65521;
 
         const last = top + rows >= rect.Height;
-        const compressed = deflateRawSync(raw, {
-          level: compressionLevel,
-          finishFlush: last ? zlibConstants.Z_FINISH : zlibConstants.Z_SYNC_FLUSH,
+        const compressed = zlib.deflateRawSync(raw, {
+          level,
+          finishFlush: last ? zlib.constants.Z_FINISH : zlib.constants.Z_SYNC_FLUSH,
         });
         const payload = first ? Buffer.concat([zlibHeader, compressed]) : compressed;
-        fs.writeSync(fd, PngWriter.chunk('IDAT', Buffer.from(payload)));
+        fs.writeSync(fd, PngWriter.chunk('IDAT', payload));
         first = false;
       }
 
@@ -113,8 +123,11 @@ export class PngWriter {
     const t = Buffer.from(type, 'ascii');
     const len = Buffer.alloc(4);
     writeBEU32(len, 0, payload.length);
-    const crcData = Buffer.concat([t, payload]);
-    const crc = updateCrc(0xffffffff, crcData) ^ 0xffffffff;
+    // CRC over type+payload without copying the payload: zlib.crc32 accepts the
+    // previous checksum, so crc(type+payload) = crc(payload, crc(type)).
+    const crc = hasNativeCrc
+      ? (nativeCrc32!(payload, nativeCrc32!(t)) >>> 0)
+      : (updateCrc(0xffffffff, Buffer.concat([t, payload])) ^ 0xffffffff);
     const crcBuf = Buffer.alloc(4);
     writeBEU32(crcBuf, 0, crc >>> 0);
     return Buffer.concat([len, t, payload, crcBuf]);

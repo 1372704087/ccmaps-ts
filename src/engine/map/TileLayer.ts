@@ -1,6 +1,6 @@
 // Port of CNCMaps.Engine.Map.TileLayer (engine tile storage with neighbour queries)
 import { Point, Size } from '../../shared/Geometry.js';
-import { logger } from '../../shared/Log.js';
+import { logger, LogLevel } from '../../shared/Log.js';
 import type { ModConfig } from '../../shared/ModConfig.js';
 import type { IsoTile } from '../../formats/map/MapObjects.js';
 import { MapTile } from './MapTile.js';
@@ -80,7 +80,9 @@ export class TileLayer {
     const dy = rx + ry - this.fullSize.Width - 1;
 
     if (dx < 0 || dy < 0 || dx >= this.tiles.length || Math.trunc(dy / 2) >= this.tiles[0].length) {
-      logger.trace(`Referencing empty tile at (rx,ry)=(${rx},${ry}); (dx,dy)=(${dx},${dy})`);
+      if (logger.isEnabled(LogLevel.Trace)) {
+        logger.trace(`Referencing empty tile at (rx,ry)=(${rx},${ry}); (dx,dy)=(${dx},${dy})`);
+      }
       return null;
     }
     return this.GetTile(dx, Math.trunc(dy / 2));

@@ -8,14 +8,25 @@ export enum LogLevel {
 }
 
 class LoggerClass {
-  private level: LogLevel = process.env.CNCMAPS_LOG_LEVEL
-    ? ((parseInt(process.env.CNCMAPS_LOG_LEVEL, 10) as LogLevel) ?? LogLevel.Info)
-    : LogLevel.Info;
+  private level: LogLevel = LoggerClass.parseLevel(process.env.CNCMAPS_LOG_LEVEL);
 
   private sink: ((level: LogLevel, message: string) => void) | null = null;
 
+  private static parseLevel(value: string | undefined): LogLevel {
+    if (value == null || value.trim() === '') return LogLevel.Info;
+    const n = Number.parseInt(value, 10);
+    return Number.isFinite(n) && n >= LogLevel.Trace && n <= LogLevel.Fatal ? (n as LogLevel) : LogLevel.Info;
+  }
+
   setLevel(l: LogLevel): void { this.level = l; }
   setSink(sink: ((level: LogLevel, message: string) => void) | null): void { this.sink = sink; }
+
+  /** True when messages at `level` would actually be emitted. Hot paths must check this before
+   * building a template string: `logger.trace(\`...${obj}\`)` evaluates the string even when the
+   * trace level is disabled, which is millions of wasted allocations per map at 1M tiles. */
+  isEnabled(level: LogLevel): boolean {
+    return level >= this.level;
+  }
 
   private fmt(level: string, msg: string): string {
     const ms = (process.hrtime.bigint() / 1000000n).toString();

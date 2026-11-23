@@ -11,7 +11,7 @@ import {
   SizeMode,
   OverlayTibType,
 } from '../../shared/Enums.js';
-import { logger } from '../../shared/Log.js';
+import { logger, LogLevel } from '../../shared/Log.js';
 import { PngWriter } from '../../rendering/PngWriter.js';
 import { ModConfig } from '../../shared/ModConfig.js';
 import { VirtualFileSystem } from '../../formats/vfs/VirtualFileSystem.js';
@@ -262,6 +262,26 @@ export class MapRenderer {
       if (tile != null) tile.AddObject(str);
       this._structureObjects.push(str);
     }
+
+  }
+
+  /** The object pass used to call GetObjectsAt() for every cell, which allocated
+   * an array and scanned the tile seven times. Build it once after
+   * RemoveUnknownObjects(): that cleanup runs after LoadAllObjects and can drop
+   * invalid infantry/units/structures, so building earlier would leave the draw
+   * lists pointing at removed objects. Terrain, smudges and overlays are drawn
+   * by their own passes; the rest keep the engine's order: infantry, units,
+   * structures, aircraft. */
+  private BuildDrawObjects(): void {
+    for (const tile of this._tiles) {
+      const src = tile.AllObjects;
+      const out = tile.DrawObjects;
+      out.length = 0;
+      for (const o of src) if (o instanceof InfantryObject) out.push(o);
+      for (const o of src) if (o instanceof UnitObject) out.push(o);
+      for (const o of src) if (o instanceof StructureObject) out.push(o);
+      for (const o of src) if (o instanceof AircraftObject) out.push(o);
+    }
   }
 
   LoadInis(): boolean {
@@ -323,6 +343,7 @@ export class MapRenderer {
     if (!this._theater.Initialize()) return false;
 
     this.RemoveUnknownObjects();
+    this.BuildDrawObjects();
     this.SetDrawables();
     this.ExpandSmudgeFootprints();
 
@@ -1116,7 +1137,8 @@ export class MapRenderer {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
     }
-    for (let y = this.FullSize.Height - 1; y >= 0; y--) {
+    const [cellRowStart, cellRowEnd] = this.GetBandRowWindow(240);
+    for (let y = cellRowEnd; y >= cellRowStart; y--) {
       for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
       for (let x = 0; x <= this.FullSize.Width * 2 - 2; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
     }
@@ -1272,8 +1294,9 @@ export class MapRenderer {
     this._bandHeight = bandHeight;
 
     let lastReported = 0.0;
-    for (let y = 0; y < this.FullSize.Height; y++) {
-      logger.trace(`Drawing tiles row ${y}`);
+    const [tileRowStart, tileRowEnd] = this.GetBandRowWindow(40);
+    for (let y = tileRowStart; y <= tileRowEnd; y++) {
+      if (logger.isEnabled(LogLevel.Trace)) logger.trace(`Drawing tiles row ${y}`);
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) this.DrawTilePass(this._tiles.GetTile(x, y));
 
@@ -1298,7 +1321,8 @@ export class MapRenderer {
     // this order decides which of two equal-z deck pieces or neighbouring trees shows. Overlay z
     // (walls, ore, bridge decks) is written before any object is tested, and units, which never
     // write z, cannot be repainted by an overlay
-    for (let y = this.FullSize.Height - 1; y >= 0; y--) {
+    const [cellRowStart, cellRowEnd] = this.GetBandRowWindow(240);
+    for (let y = cellRowEnd; y >= cellRowStart; y--) {
       for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
       for (let x = 0; x <= this.FullSize.Width * 2 - 2; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
     }
@@ -1309,7 +1333,8 @@ export class MapRenderer {
     // into its tile surface by then, so the shadow's strict test loses on their pixels and veins
     // and ore stay bright on darkened ground; that is why the pass runs after the overlays here
     const tileTypes = this._theater.GetTileCollection();
-    for (let y = 0; y < this.FullSize.Height; y++) {
+    const [shadowRowStart, shadowRowEnd] = this.GetBandRowWindow(180);
+    for (let y = shadowRowStart; y <= shadowRowEnd; y++) {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
         const t = this._tiles.GetTile(x, y);
         if (t != null && this.InBand(t, 180)) tileTypes.DrawTileShadow(t, this._drawingSurface);
@@ -1323,7 +1348,8 @@ export class MapRenderer {
     // gamemd draws every TerrainClass before the techno layer (TREE -> BLDG -> ANIM): a tree's
     // write-only shadow lands on the tile art first and anything standing in front repaints it
     // with its own z
-    for (let y = this.FullSize.Height - 1; y >= 0; y--) {
+    const [terrainRowStart, terrainRowEnd] = this.GetBandRowWindow(240);
+    for (let y = terrainRowEnd; y >= terrainRowStart; y--) {
       for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) {
         const tile = this._tiles.GetTile(x, y);
         if (tile != null && this.InBand(tile, 240))
@@ -1338,19 +1364,18 @@ export class MapRenderer {
     logger.info('Terrain objects drawn');
 
     lastReported = 0.0;
-    for (let y = 0; y < this.FullSize.Height; y++) {
-      logger.trace(`Drawing objects row ${y}`);
+    const [objectRowStart, objectRowEnd] = this.GetBandRowWindow(420);
+    for (let y = objectRowStart; y <= objectRowEnd; y++) {
+      if (logger.isEnabled(LogLevel.Trace)) logger.trace(`Drawing objects row ${y}`);
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null && !this.InBand(tile, 420)) continue;
-        for (const o of this.GetObjectsAt(x, y, false))
-          if (!(o instanceof TerrainObject) && !(o instanceof SmudgeObject)) this._theater.Draw(o, this._drawingSurface);
+        if (tile == null || !this.InBand(tile, 420)) continue;
+        for (const o of tile.DrawObjects) this._theater.Draw(o, this._drawingSurface);
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
-        if (tile != null && !this.InBand(tile, 420)) continue;
-        for (const o of this.GetObjectsAt(x, y, false))
-          if (!(o instanceof TerrainObject) && !(o instanceof SmudgeObject)) this._theater.Draw(o, this._drawingSurface);
+        if (tile == null || !this.InBand(tile, 420)) continue;
+        for (const o of tile.DrawObjects) this._theater.Draw(o, this._drawingSurface);
       }
 
       if (this.Progress != null)
@@ -1386,6 +1411,22 @@ export class MapRenderer {
   private InBand(t: MapTile, margin: number): boolean {
     const anchorY = Math.trunc(((t.Dy - t.Z) * this._config.TileHeight) / 2);
     return anchorY + margin >= this._bandOriginY && anchorY - margin <= this._bandOriginY + this._bandHeight;
+  }
+
+  /** Rows whose tiles can pass InBand() for this band. A banded render used to walk every map
+   * row for each of the five passes; for a 500x500 map and 45px strips that is ~8e8 checks that
+   * can only fail. maxZ is the highest tile height the engine supports (RA2 cliffs reach 12). */
+  private GetBandRowWindow(margin: number): [number, number] {
+    const rows = this.FullSize.Height;
+    if (this._bandHeight >= rows * this._config.TileHeight) return [0, rows - 1];
+    const th = this._config.TileHeight;
+    const maxZ = 20;
+    const start = Math.max(0, Math.floor((this._bandOriginY - margin - th / 2) / th) - 1);
+    const end = Math.min(
+      rows - 1,
+      Math.ceil((this._bandOriginY + this._bandHeight + margin + (maxZ * th) / 2) / th) + 1,
+    );
+    return [start, end];
   }
 
   private DrawTilePass(tile: MapTile | null): void {

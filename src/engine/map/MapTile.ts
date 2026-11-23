@@ -51,6 +51,11 @@ export class MapTile extends NumberedObject {
   }
   private readonly _allObjects: GameObject[] = [];
 
+  /** Objects the main object pass draws, in the exact order Map.GetObjectsAt used: infantry,
+   * units, structures, aircraft (terrain, smudges and overlays are handled by other passes).
+   * Built once after map load so the per-cell draw loop allocates nothing. */
+  readonly DrawObjects: GameObject[] = [];
+
   constructor(
     dx = 0,
     dy = 0,
@@ -95,8 +100,8 @@ export class MapTile extends NumberedObject {
   get Tile(): MapTile {
     return this;
   }
-  set Tile(_value: MapTile | null) {
-    throw new Error('lol wat u tryin bra');
+  set Tile(value: MapTile | null) {
+    if (value !== this) throw new Error('MapTile cannot be reassigned to another tile');
   }
 
   GetTileFile(): TmpFile | null {

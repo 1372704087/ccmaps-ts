@@ -1,7 +1,7 @@
 ﻿// Port of CNCMaps.Engine.Game.ObjectCollection
 import type { IniFile, IniSection } from '../../formats/IniFile.js';
 import { VirtualFileSystem } from '../../formats/vfs/index.js';
-import { ModConfig } from '../../shared/ModConfig.js';
+import { ModConfig, ObjectOverride } from '../../shared/ModConfig.js';
 import {
   CollectionType,
   TheaterType,
@@ -33,6 +33,9 @@ import { logger } from '../../shared/Log.js';
 export class ObjectCollection extends GameCollection {
   readonly FireNames: string[] = [];
   readonly Palettes: PaletteCollection;
+  // Overrides matching this collection/theater, with their regex compiled once. The previous
+  // code built a RegExp for every object x every override (thousands of compilations per map).
+  private readonly _overrides: { ovr: ObjectOverride; regex: RegExp }[] = [];
 
   constructor(
     type: CollectionType,
@@ -47,6 +50,19 @@ export class ObjectCollection extends GameCollection {
     super(type, theater, config, vfs, rules, art);
 
     this.Palettes = palettes;
+    for (const ovr of this._config.ObjectOverrides) {
+      if ((ovr.CollectionTypes & this.Type) !== this.Type) continue;
+      if ((ovr.TheaterTypes & this.Theater) !== this.Theater) continue;
+      let regex: RegExp;
+      try {
+        regex = new RegExp(ovr.ObjRegex, 'i');
+      } catch {
+        logger.warn(`Ignoring object override with invalid regex '${ovr.ObjRegex}'`);
+        continue;
+      }
+      this._overrides.push({ ovr, regex });
+    }
+    this._overrides.sort((a, b) => b.ovr.Priority - a.ovr.Priority);
     if (this._config.Engine >= EngineType.RedAlert2) {
       const fireNames = this.Rules.readString(
         this._config.Engine === EngineType.RedAlert2 ? 'AudioVisual' : 'General',
@@ -124,20 +140,9 @@ export class ObjectCollection extends GameCollection {
         throw new RangeError('Invalid enum value for CollectionType');
     }
 
-    // overrides from the modconfig
-    const cfgOverrides = this._config.ObjectOverrides
-      .filter(
-        (ovr) =>
-          // matches collection
-          (ovr.CollectionTypes & this.Type) === this.Type &&
-          // matches theater
-          (ovr.TheaterTypes & this.Theater) === this.Theater &&
-          // matches object regex
-          new RegExp(ovr.ObjRegex, 'i').test(drawable.Name),
-      )
-      .sort((a, b) => b.Priority - a.Priority);
-
-    for (const cfgOverride of cfgOverrides) {
+    // overrides from the modconfig (already collection/theater filtered and regex-compiled)
+    for (const { ovr: cfgOverride, regex } of this._overrides) {
+      if (!regex.test(drawable.Name)) continue;
       logger.debug(`Object ${drawable.Name} receives overrides from regex ${cfgOverride.ObjRegex}`);
 
       if (cfgOverride.Lighting !== LightingType.Default) drawable.Props.LightingType = cfgOverride.Lighting;
