@@ -19,7 +19,7 @@
     "web:serve": "node src/web/server.mjs",
     "prepack": "npm run build:all && node scripts/clean-dist-package.mjs"
   },
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "devDependencies": {
     "@types/node": "^26.6.2",
     "buffer": "^6.0.3",

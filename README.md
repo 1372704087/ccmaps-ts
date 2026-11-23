@@ -146,6 +146,10 @@ npm run web
 
 上传文件与渲染产物不会永久留在临时目录：上传文件默认保留 1 小时、最多 200 个，服务启动时及运行中每 10 分钟清理；渲染结果在内存中保留 30 分钟（最多 16 张），临时输出目录在每个任务结束或取消后立即删除。
 
-## 版权声明
+## 版权与许可
 
-本项目是 [ccmaps-net](https://github.com/zzattack/ccmaps-net) 的 TypeScript 移植版，最初由 Frank Razenberg 开发。二次创作与重新分发请遵守原始项目许可证。本仓库仅包含源代码，不包含任何受版权保护的游戏资源（`.mix`、SHP、VXL 等），渲染时需要用户自备游戏安装目录。
+本项目是 [ccmaps-net](https://github.com/zzattack/ccmaps-net) 的 TypeScript 移植版，最初由 Frank Razenberg（zzattack）开发。
+
+原项目主体采用 MIT 许可证（见 [LICENSE-MIT](LICENSE-MIT)），但其中来自 OpenRA、XCC 的部分代码采用 GNU GPL v3。本移植版包含这些 GPL v3 代码（例如 OpenRA 的 Blowfish 实现与体素着色器、XCC 的 CSF 解析），因此整个项目按 **GNU General Public License v3.0** 分发，完整条款见 [LICENSE](LICENSE)。
+
+本仓库仅包含源代码，不包含任何受版权保护的游戏资源（`.mix`、SHP、VXL 等），渲染时需要用户自备游戏安装目录。
