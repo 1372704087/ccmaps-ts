@@ -19,6 +19,7 @@ import { IniFile, IniSection } from '../../formats/IniFile.js';
 import { MapFile } from '../../formats/map/MapFile.js';
 import { Palette } from '../../rendering/Palette.js';
 import { DrawingSurface, SurfaceFormat } from '../../rendering/DrawingSurface.js';
+import { LayerCategory } from '../../rendering/LayerCategory.js';
 import { Theater } from '../game/Theater.js';
 import { RenderProgress } from '../RenderProgress.js';
 import { Operations } from './Operations.js';
@@ -71,6 +72,8 @@ export class MapRenderer {
   MarkOreFields = false;
   /// <summary>Have the voxel blit record which pixels it wrote (for --debug-voxelmask).</summary>
   TrackVoxelMask = false;
+  /// <summary>Have every blit record the layer category of the pixel (for --output-psd).</summary>
+  TrackCategories = false;
 
   /// <summary>One rules [Colors] name per start position A-H, empty where nobody starts.
   /// null switches the pre-capture pass off entirely.</summary>
@@ -843,6 +846,7 @@ export class MapRenderer {
 
   MarkIceGrowth(): void {
     logger.info('Marking ice growth cells');
+    this._drawingSurface.setCategory(LayerCategory.Terrain);
     for (const tile of [...this._tiles]) {
       if (tile == null) continue;
       const t = this._mapFile.Tiles.getTileR(tile.Rx, tile.Ry);
@@ -868,6 +872,7 @@ export class MapRenderer {
             this._drawingSurface.data[idx] = 0x88;
             this._drawingSurface.data[idx + 1] = 0xff;
             this._drawingSurface.data[idx + 2] = 0x00;
+            this._drawingSurface.markCategory(drawY * this._drawingSurface.Width + drawX);
           }
         }
       }
@@ -1044,6 +1049,7 @@ export class MapRenderer {
 
   DrawStartPositions(): void {
     logger.info('Marking start positions');
+    this._drawingSurface.setCategory(LayerCategory.Terrain);
     const markerSize = this.StartMarkerSize ?? 4.0;
     for (const entry of this._wayPoints) {
       if (entry.Number < this.StartCapacity) {
@@ -1290,6 +1296,9 @@ export class MapRenderer {
     // 29760x14805 (2.2 GB of pixels + z), which no longer fits a normal render budget
     this._drawingSurface = new DrawingSurface(fullWidth, bandHeight, SurfaceFormat.Bgr24, 0, originY);
     this._drawingSurface.TrackVoxelMask = this.TrackVoxelMask;
+    this._drawingSurface.TrackCategories = this.TrackCategories;
+    this._drawingSurface.getCategories();
+    this._drawingSurface.setCategory(LayerCategory.Terrain);
     this._bandOriginY = originY;
     this._bandHeight = bandHeight;
 
@@ -1321,6 +1330,7 @@ export class MapRenderer {
     // this order decides which of two equal-z deck pieces or neighbouring trees shows. Overlay z
     // (walls, ore, bridge decks) is written before any object is tested, and units, which never
     // write z, cannot be repainted by an overlay
+    this._drawingSurface.setCategory(LayerCategory.Overlay);
     const [cellRowStart, cellRowEnd] = this.GetBandRowWindow(240);
     for (let y = cellRowEnd; y >= cellRowStart; y--) {
       for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) this.DrawCellPass(this._tiles.GetTile(x, y));
@@ -1333,6 +1343,7 @@ export class MapRenderer {
     // into its tile surface by then, so the shadow's strict test loses on their pixels and veins
     // and ore stay bright on darkened ground; that is why the pass runs after the overlays here
     const tileTypes = this._theater.GetTileCollection();
+    this._drawingSurface.setCategory(LayerCategory.Terrain);
     const [shadowRowStart, shadowRowEnd] = this.GetBandRowWindow(180);
     for (let y = shadowRowStart; y <= shadowRowEnd; y++) {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
@@ -1348,6 +1359,7 @@ export class MapRenderer {
     // gamemd draws every TerrainClass before the techno layer (TREE -> BLDG -> ANIM): a tree's
     // write-only shadow lands on the tile art first and anything standing in front repaints it
     // with its own z
+    this._drawingSurface.setCategory(LayerCategory.TerrainObject);
     const [terrainRowStart, terrainRowEnd] = this.GetBandRowWindow(240);
     for (let y = terrainRowEnd; y >= terrainRowStart; y--) {
       for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) {
@@ -1370,12 +1382,18 @@ export class MapRenderer {
       for (let x = this.FullSize.Width * 2 - 2; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
         if (tile == null || !this.InBand(tile, 420)) continue;
-        for (const o of tile.DrawObjects) this._theater.Draw(o, this._drawingSurface);
+        for (const o of tile.DrawObjects) {
+          this._drawingSurface.setCategory(this.CategoryForObject(o));
+          this._theater.Draw(o, this._drawingSurface);
+        }
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
         if (tile == null || !this.InBand(tile, 420)) continue;
-        for (const o of tile.DrawObjects) this._theater.Draw(o, this._drawingSurface);
+        for (const o of tile.DrawObjects) {
+          this._drawingSurface.setCategory(this.CategoryForObject(o));
+          this._theater.Draw(o, this._drawingSurface);
+        }
       }
 
       if (this.Progress != null)
@@ -1393,6 +1411,7 @@ export class MapRenderer {
     // Highlight ore & gem fields when requested (marked + redrawn on top).
     if (this.MarkOreFields) {
       logger.info('Highlighting ore and gems');
+      this._drawingSurface.setCategory(LayerCategory.Overlay);
       this.MarkOreAndGems();
       this.RedrawOreAndGems();
     }
@@ -1432,14 +1451,33 @@ export class MapRenderer {
   private DrawTilePass(tile: MapTile | null): void {
     if (tile == null) return;
     if (!this.InBand(tile, 40)) return;
+    this._drawingSurface.setCategory(LayerCategory.Terrain);
     this._theater.Draw(tile, this._drawingSurface);
-    for (const o of tile.AllObjects) if (o instanceof SmudgeObject) this._theater.Draw(o, this._drawingSurface);
+    for (const o of tile.AllObjects) {
+      if (o instanceof SmudgeObject) {
+        this._drawingSurface.setCategory(LayerCategory.Smudge);
+        this._theater.Draw(o, this._drawingSurface);
+      }
+    }
   }
 
   private DrawCellPass(tile: MapTile | null): void {
     if (tile == null) return;
     if (!this.InBand(tile, 240)) return;
+    this._drawingSurface.setCategory(LayerCategory.Overlay);
     for (const o of tile.AllObjects) if (o instanceof OverlayObject) this._theater.Draw(o, this._drawingSurface);
+  }
+
+  /** PSD category for a techno/terrain object in the object pass. */
+  private CategoryForObject(o: GameObject): LayerCategory {
+    if (o instanceof StructureObject) return LayerCategory.Structure;
+    if (o instanceof InfantryObject) return LayerCategory.Infantry;
+    if (o instanceof AircraftObject) return LayerCategory.Aircraft;
+    if (o instanceof UnitObject) return o.Drawable?.Naval ? LayerCategory.Naval : LayerCategory.Vehicle;
+    if (o instanceof TerrainObject) return LayerCategory.TerrainObject;
+    if (o instanceof OverlayObject) return LayerCategory.Overlay;
+    if (o instanceof SmudgeObject) return LayerCategory.Smudge;
+    return LayerCategory.Terrain;
   }
 
   GeneratePreviewPack(previewMarkers: PreviewMarkersType, sizeMode: SizeMode, map: IniFile, fixDimensions: boolean): void {
@@ -1787,6 +1825,7 @@ export class MapRenderer {
 
   PlotTunnels(adjustPosition = true): void {
     logger.info('Plotting Tunnel path');
+    this._drawingSurface.setCategory(LayerCategory.Terrain);
     let lineColor = { r: 255, g: 0, b: 0, a: 148 };
     let dashColor = { r: 0, g: 255, b: 205, a: 180 };
     const dashValues = [2, 1];

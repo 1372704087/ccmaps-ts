@@ -70,6 +70,8 @@ export class TmpRenderer {
 
     const stride = ds.Stride;
     const data = ds.data;
+    const categories = ds.getCategories();
+    const category = ds.CurrentCategory;
 
     const halfCx = Math.trunc(tmp.BlockWidth / 2);
     const halfCy = Math.trunc(tmp.BlockHeight / 2);
@@ -101,6 +103,7 @@ export class TmpRenderer {
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
           if (useZ) zBuffer[zIdx] = zBufVal;
+          if (categories != null) categories[zIdx] = category;
         }
         w += 3;
         zIdx++;
@@ -123,6 +126,7 @@ export class TmpRenderer {
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
           if (useZ) zBuffer[zIdx] = zBufVal;
+          if (categories != null) categories[zIdx] = category;
         }
         w += 3;
         zIdx++;
@@ -178,6 +182,7 @@ export class TmpRenderer {
           data[w + 1] = bgr[ci + 1];
           data[w + 2] = bgr[ci + 2];
           zBuffer[zIdx] = zBufVal;
+          if (categories != null) categories[zIdx] = category;
           w += 3;
         } else {
           w += 3;

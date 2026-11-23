@@ -181,6 +181,8 @@ export class ShpRenderer {
     const zBuffer = ds.getZBuffer();
 
     const data = ds.data;
+    const categories = ds.getCategories();
+    const category = ds.CurrentCategory;
     const wLow = 0;
     const wHigh = stride * ds.Height;
     // banded surfaces hold one strip of the map; the blit keeps the map's own coordinates for
@@ -316,6 +318,7 @@ export class ShpRenderer {
             if (!unitLike) {
               if (!isAnim && !plainBlit) zBuffer[zIdx] = zBufVal;
             }
+            if (categories != null) categories[zIdx] = category;
           }
         }
 

@@ -26,6 +26,15 @@ export class UnitDrawable extends Drawable {
   override LoadFromRules(): void {
     super.LoadFromArtEssential();
 
+    // Water-only units: RA2 marks them with Naval=yes; other rules sets use the water
+    // movement zone / float speed instead.
+    const zone = this.Rules!.readString('MovementZone').toUpperCase();
+    const speed = this.Rules!.readString('SpeedType').toUpperCase();
+    this.Naval = this.Rules!.readBool('Naval')
+      || this.Rules!.readBool('WaterBound')
+      || zone === 'WATER'
+      || speed === 'FLOAT';
+
     // jumpjet units that can never land (BalloonHover, e.g. the Kirov airship)
     // hover at their cruise height even when preplaced on a map; one height
     // level is 104 leptons and projects to half a tile

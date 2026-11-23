@@ -107,6 +107,7 @@
         <select id="format">
           <option value="png" selected>PNG</option>
           <option value="jpg">JPEG</option>
+          <option value="psd" data-i18n="fmtPsd">PSD（分层）</option>
         </select>
       </div>
       <div class="field">
@@ -176,6 +177,7 @@
         <input id="jpegQuality" type="range" min="1" max="100" value="95">
       </div>
     </div>
+    <div class="format-hint" id="psdHint" data-i18n="psdHint" hidden>PSD 分层导出仅支持服务器模式，会按地形、建筑、步兵、载具、飞行器、海军、地形对象、覆盖物、污染物写入独立图层</div>
 
     <div class="toggles">
       <label class="toggle"><input type="checkbox" id="markStartPos"><span class="tk"></span><span data-i18n="tglStartPos">标记出生点</span></label>

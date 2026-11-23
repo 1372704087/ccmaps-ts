@@ -8,6 +8,7 @@ import { Rectangle } from '../shared/Geometry.js';
 import { logger } from '../shared/Log.js';
 import { PngWriter } from './PngWriter.js';
 import { JpegWriter } from './JpegWriter.js';
+import { LayerCategory } from './LayerCategory.js';
 
 export enum SurfaceFormat {
   Bgr24 = 0,
@@ -43,6 +44,15 @@ export class DrawingSurface {
   /// real bounds without allocating a canvas.</summary>
   MeasureOnly = false;
 
+  /// <summary>Set for PSD export: allocates one byte per pixel recording which category painted
+  /// the final pixel. Categories are only written by passes that paint new art; shadow/alpha
+  /// passes leave the underlying category intact.</summary>
+  TrackCategories = false;
+  CurrentCategory: LayerCategory = LayerCategory.None;
+  /** When set, writes do not change the pixel's category (shadows, glows, highlights). */
+  PreserveCategory = false;
+  private _categories: Uint8Array | null = null;
+
   // Attached animations are drawn once every object has been drawn. gamemd orders a scene
   // terrain -> buildings -> anims and puts anims last whatever their position, so an anim's
   // art is never darkened by a shadow: nothing is drawn after it.
@@ -54,7 +64,13 @@ export class DrawingSurface {
 
   /// <summary>Queue an attached animation to be drawn once every object has been drawn.</summary>
   deferAnim(draw: () => void): void {
-    this._deferredAnims.push(draw);
+    const category = this.CurrentCategory;
+    this._deferredAnims.push(() => {
+      const previous = this.CurrentCategory;
+      this.CurrentCategory = category;
+      draw();
+      this.CurrentCategory = previous;
+    });
   }
 
   drawDeferredAnims(): void {
@@ -64,7 +80,13 @@ export class DrawingSurface {
 
   /// <summary>Queue an AlphaImage glow to be applied once everything else is drawn.</summary>
   deferAlpha(draw: () => void): void {
-    this._deferredAlpha.push(draw);
+    const category = this.CurrentCategory;
+    this._deferredAlpha.push(() => {
+      const previous = this.CurrentCategory;
+      this.CurrentCategory = category;
+      draw();
+      this.CurrentCategory = previous;
+    });
   }
 
   drawDeferredAlpha(): void {
@@ -120,11 +142,29 @@ export class DrawingSurface {
     return (this._voxelMask ??= new Uint8Array(this.Width * this.Height));
   }
 
+  /// <summary>Per-pixel category map for PSD export, or null when tracking is off.</summary>
+  getCategories(): Uint8Array | null {
+    if (!this.TrackCategories) return null;
+    return (this._categories ??= new Uint8Array(this.Width * this.Height));
+  }
+
+  setCategory(category: LayerCategory): void {
+    this.CurrentCategory = category;
+  }
+
+  /** Records the category on a pixel index (x + y * Width) after a blitter painted it. */
+  markCategory(pixelIndex: number): void {
+    if (this._categories == null || this.PreserveCategory) return;
+    if (this.CurrentCategory === LayerCategory.None) return;
+    this._categories[pixelIndex] = this.CurrentCategory;
+  }
+
   // Writes an RGB triplet at a flat byte offset (offset.Y * Stride + offset.X * 3).
   writePixel(wIdx: number, b: number, g: number, r: number): void {
     this.data[wIdx] = b;
     this.data[wIdx + 1] = g;
     this.data[wIdx + 2] = r;
+    this.markCategory(Math.trunc(wIdx / this.BytesPerPixel));
   }
 
   savePNG(path: string, compressionLevel: number, left: number, top: number, width: number, height: number): void {

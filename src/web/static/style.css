@@ -297,6 +297,7 @@ select:focus{border-color:var(--focus-color);box-shadow:0 0 0 3px color-mix(in s
 .preset-row{display:flex;gap:8px;margin-bottom:12px}
 .preset-row select{flex:1;min-width:0}
 .preset-btn{padding:7px 10px;font-size:12px;white-space:nowrap}
+.format-hint{font-size:11px;line-height:1.55;color:var(--muted);margin:-4px 0 12px;padding:8px 10px;border:1px dashed rgba(130,180,230,.24);border-radius:8px;background:rgba(255,255,255,.03)}
 #serverHealth.warn{color:var(--warn)}
 
 /* range slider */

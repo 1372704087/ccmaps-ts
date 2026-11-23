@@ -87,6 +87,8 @@ export class VoxelDrawable extends Drawable {
     const zBuffer = ds.getZBuffer();
     const shadowBufVxl = vxl_ds.getShadows();
     const voxelMask = ds.getVoxelMask();
+    const categories = ds.getCategories();
+    const category = ds.CurrentCategory;
 
     let firstDrawnRow = Number.MAX_VALUE;
     for (let y = 0; y < vxl_ds.Height; y++) {
@@ -157,6 +159,7 @@ export class VoxelDrawable extends Drawable {
             ds.data[wIdx + 1] = srcG;
             ds.data[wIdx + 2] = srcR;
           }
+          if (categories != null) categories[zIdx] = category;
           if (voxelMask != null) voxelMask[zIdx] = 1;
         }
         // shadows lie on the caster's ground plane and darken only where that

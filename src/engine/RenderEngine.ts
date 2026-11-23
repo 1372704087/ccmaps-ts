@@ -26,6 +26,7 @@ import { Palette } from '../rendering/Palette.js';
 import { resizeRegionBox } from '../rendering/ImageUtil.js';
 import { Rand } from '../shared/Util.js';
 import { DrawingSurface, SurfaceFormat } from '../rendering/DrawingSurface.js';
+import { PsdExporter } from '../rendering/PsdExporter.js';
 
 export class RenderEngine {
   /** Engine chosen by the last render (explicit or auto-detected). */
@@ -118,6 +119,7 @@ export class RenderEngine {
     renderer.StartMarkerSize = settings.MarkerStartSize;
     renderer.PreCaptureColors = settings.PreCaptureColors;
     renderer.TrackVoxelMask = settings.DebugVoxelMaskFile !== '';
+    renderer.TrackCategories = settings.SavePSD;
     if (settings.ReportProgress || settings.ProgressSink != null) {
       const sink = settings.ProgressSink
         ?? ((pct: number, phase: string) => process.stdout.write(`progress:${Math.trunc(pct)}:${phase}\n`));
@@ -158,7 +160,21 @@ export class RenderEngine {
       const budgetPixels = 32_000_000; // ~160 MB of pixels + depth per strip
       bandHeight = Math.min(4096, Math.max(512, Math.trunc(budgetPixels / Math.max(1, fullRect.Width))));
     }
-    const banded = bandHeight > 0 && bandHeight < Math.max(1, fullRect.Height) && settings.PreviewWidth > 0;
+    const banded = bandHeight > 0 && bandHeight < Math.max(1, fullRect.Height) && settings.PreviewWidth > 0
+      && !settings.SavePSD;
+    if (settings.SavePSD) {
+      // PSD layers cannot come from banded strips, and each layer holds a full-width RGBA
+      // buffer, so cap the canvas well below the flat-image path's limit.
+      const maxPsdPixels = 32_000_000;
+      if (fullPixels > maxPsdPixels || fullRect.Width > 30000 || fullRect.Height > 30000) {
+        logger.fatal(
+          `PSD export needs the whole map in memory (map is ${fullRect.Width}x${fullRect.Height}); ` +
+          'use PNG/JPEG or a smaller map',
+        );
+        renderer.FreeUseless();
+        return EngineResult.SurfaceTooLarge;
+      }
+    }
     // The cap protects the surface actually allocated. A banded preview only ever holds one strip,
     // so a 500x500 map that would need a 2.2 GB full canvas is fine when it is downscaled band by band.
     if (!banded && settings.MaxSurfacePixels > 0 && fullPixels > settings.MaxSurfacePixels) {
@@ -243,14 +259,17 @@ export class RenderEngine {
     const surface = renderer.GetDrawingSurface();
     let outputSurface = surface;
     let outputRect = saveRect;
-    if (settings.PreviewWidth > 0 && saveRect.Width > settings.PreviewWidth) {
+    if (!settings.SavePSD && settings.PreviewWidth > 0 && saveRect.Width > settings.PreviewWidth) {
       const targetWidth = settings.PreviewWidth;
       const targetHeight = Math.max(1, Math.round((saveRect.Height * targetWidth) / saveRect.Width));
       outputSurface = resizeRegionBox(surface, saveRect, targetWidth, targetHeight);
       outputRect = new Rectangle(0, 0, targetWidth, targetHeight);
       logger.info(`Downscaling saved image to ${targetWidth}x${targetHeight}`);
     }
-    if (settings.OutputSink != null) {
+    if (settings.SavePSD && settings.OutputSink == null) {
+      PsdExporter.save(outPath, surface, saveRect);
+      logger.info(`Saved layered PSD ${outPath}`);
+    } else if (settings.OutputSink != null) {
       settings.OutputSink(outputSurface, outputRect);
     } else {
       RenderEngine.saveImage(outputSurface, outPath, settings, outputRect);
@@ -399,8 +418,8 @@ export class RenderEngine {
     const baseExt = path.extname(mapName);
     let outBase = settings.OutputFile !== '' ? settings.OutputFile : path.join(path.dirname(mapName), path.basename(mapName, baseExt));
     if (settings.OutputDir !== '') outBase = path.join(settings.OutputDir, path.basename(outBase));
-    const ext = settings.SaveJPEG && !settings.SavePNG ? '.jpg' : '.png';
-    return outBase.replace(/\.(png|jpg|jpeg)$/i, '') + ext;
+    const ext = settings.SavePSD ? '.psd' : (settings.SaveJPEG && !settings.SavePNG ? '.jpg' : '.png');
+    return outBase.replace(/\.(png|jpg|jpeg|psd)$/i, '') + ext;
   }
 
   private static saveImage(

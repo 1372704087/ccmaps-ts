@@ -77,6 +77,8 @@ export abstract class Drawable {
   IsBuildingPart = true;
 
   IsVoxel = false;
+  /** Water-only unit art; used to split the PSD 海军 layer from land vehicles. */
+  Naval = false;
   NewTheater = false;
   Image = '';
   TheaterExtension = false;

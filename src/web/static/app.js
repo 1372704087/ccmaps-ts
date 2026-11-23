@@ -3,7 +3,7 @@
   'use strict';
 
   // Keep in sync with package.json.
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.3.0';
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -16,6 +16,7 @@
     gameResSection: $('gameResSection'),
     uploadBtn: $('uploadBtn'), fileInput: $('fileInput'),
     format: $('format'), engine: $('engine'), sizeMode: $('sizeMode'),
+    psdHint: $('psdHint'),
     pngCompression: $('pngCompression'), pngCompressionVal: $('pngCompressionVal'),
     previewWidth: $('previewWidth'), jpegQuality: $('jpegQuality'), jpegQualityVal: $('jpegQualityVal'),
     aspect: $('aspect'), cropEnable: $('cropEnable'), cropInputs: $('cropInputs'), cropHint: $('cropHint'),
@@ -144,6 +145,10 @@
       'zipFailed': 'ZIP 创建失败，请重试',
       'paramsTitle': '渲染参数',
       'lblFormat': '输出格式',
+      'fmtPsd': 'PSD（分层）',
+      'psdHint': 'PSD 分层导出仅支持服务器模式，会按地形、建筑、步兵、载具、飞行器、海军、地形对象、覆盖物、污染物写入独立图层',
+      'psdServerOnly': 'PSD 分层导出仅支持服务器模式，请切换到服务器或使用 PNG/JPEG',
+      'psdReady': 'PSD 已生成，点击下方按钮下载',
       'lblEngine': '引擎',
       'engineAuto': '自动检测',
       'engineYR': '尤里的复仇 (YR)',
@@ -319,6 +324,10 @@
       'zipFailed': 'ZIP creation failed; please retry',
       'paramsTitle': 'Render Options',
       'lblFormat': 'Output Format',
+      'fmtPsd': 'PSD (layers)',
+      'psdHint': 'Layered PSD export is server-only and writes terrain, buildings, infantry, vehicles, aircraft, naval, terrain objects, overlays and smudges as separate layers',
+      'psdServerOnly': 'Layered PSD export is server-only; switch to server mode or use PNG/JPEG',
+      'psdReady': 'PSD ready — use the download button below',
       'lblEngine': 'Engine',
       'engineAuto': 'Auto Detect',
       'engineYR': 'Yuri\'s Revenge (YR)',
@@ -786,8 +795,11 @@
 
   function applyFormatFields() {
     const jpg = els.format.value === 'jpg';
-    els.pngCompressionField.style.display = jpg ? 'none' : '';
+    const psd = els.format.value === 'psd';
+    els.pngCompressionField.style.display = jpg || psd ? 'none' : '';
     els.jpegQualityField.style.display = jpg ? '' : 'none';
+    els.psdHint.hidden = !psd;
+    els.previewWidth.disabled = psd;
   }
 
   const PRESET_KEY = 'cncmaps_presets';
@@ -855,7 +867,7 @@
 
   function applyPresetValues(values) {
     if (!values) return;
-    els.format.value = values.format === 'jpg' ? 'jpg' : 'png';
+    els.format.value = values.format === 'jpg' ? 'jpg' : (values.format === 'psd' ? 'psd' : 'png');
     els.engine.value = values.engine || '';
     els.sizeMode.value = values.sizeMode || '';
     els.previewWidth.value = values.previewWidth || '0';
@@ -1386,6 +1398,8 @@
   }
 
   function showPreview(url, meta) {
+    const ph = els.placeholder.querySelector('p');
+    if (ph) ph.textContent = t('previewPlaceholder');
     els.previewImg.onload = () => {
       els.placeholder.style.display = 'none';
       els.previewImg.style.display = 'block';
@@ -1702,6 +1716,11 @@
     cancelRequested = false;
     if (!selectedMap) { setStatus('err', t('mapFirst')); return; }
     if (!selectedMap.file) { setStatus('err', t('browserNoMapFile')); return; }
+    if (els.format.value === 'psd') {
+      setStatus('err', t('psdServerOnly'));
+      toast(t('psdServerOnly'), 'error');
+      return;
+    }
     if (!gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
     if (!BR_CLIENT || !BR_CLIENT.supported()) {
       setRenderMode('server');
@@ -1948,10 +1967,21 @@
               lastRenderResult = { ok: false, cancelled: true };
             } else if (evt.ok) {
               setProgress(100, t('complete'));
-              currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
-              showPreview(evt.url, evt.name);
+              const isPsd = /\.psd$/i.test(evt.name || '');
+              if (isPsd) {
+                currentImage = null;
+                els.previewImg.style.display = 'none';
+                els.previewImg.removeAttribute('src');
+                els.placeholder.style.display = '';
+                const ph = els.placeholder.querySelector('p');
+                if (ph) ph.textContent = t('psdReady');
+                els.previewMeta.textContent = evt.name;
+              } else {
+                currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
+                showPreview(evt.url, evt.name);
+                addRenderHistory(evt.url, evt.downloadUrl, evt.name, null, renderValues);
+              }
               setMapStats(selectedMap, evt.meta);
-              addRenderHistory(evt.url, evt.downloadUrl, evt.name, null, renderValues);
               els.downloadBtn.disabled = false;
               els.downloadBtn.dataset.url = evt.downloadUrl;
               els.downloadBtn.dataset.name = evt.name;
@@ -2210,6 +2240,11 @@
     if (!maps.length) return;
     if (maps.length > MAX_BATCH) { setStatus('err', tf('batchTooMany', { n: MAX_BATCH })); return; }
     if (renderMode === 'browser' && !gameFiles.length) { setStatus('err', t('browserNoAssets')); return; }
+    if (renderMode === 'browser' && els.format.value === 'psd') {
+      setStatus('err', t('psdServerOnly'));
+      toast(t('psdServerOnly'), 'error');
+      return;
+    }
     await runBatch(maps.slice());
   }
 
@@ -2842,10 +2877,12 @@
   window.addEventListener('dragover', (e) => { if (!els.sources.contains(e.target)) e.preventDefault(); });
   window.addEventListener('drop', (e) => { if (!els.sources.contains(e.target)) e.preventDefault(); });
   els.downloadBtn.onclick = () => {
-    if (currentImage) {
+    const url = els.downloadBtn.dataset.url || (currentImage && currentImage.downloadUrl);
+    const name = els.downloadBtn.dataset.name || (currentImage && currentImage.name) || 'render';
+    if (url) {
       const a = document.createElement('a');
-      a.href = currentImage.downloadUrl;
-      a.download = currentImage.name;
+      a.href = url;
+      a.download = name;
       document.body.appendChild(a);
       a.click();
       a.remove();

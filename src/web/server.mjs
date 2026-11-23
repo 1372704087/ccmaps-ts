@@ -211,6 +211,7 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.psd': 'image/vnd.adobe.photoshop',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
 };
@@ -231,7 +232,7 @@ function sendJson(res, code, obj) {
 /** RFC 5987 Content-Disposition. Node throws on non-Latin-1 header values, so a
  * Chinese map name used to make /download/<token> return 500. */
 function contentDisposition(name, mime) {
-  const ext = mime === 'image/jpeg' ? '.jpg' : '.png';
+  const ext = mime === 'image/jpeg' ? '.jpg' : (mime === 'image/vnd.adobe.photoshop' ? '.psd' : '.png');
   const base = name.endsWith(ext) ? name.slice(0, -ext.length) : name;
   const fallback = (base || 'map').replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') + ext;
   const encoded = encodeURIComponent(base || 'map')
@@ -327,12 +328,12 @@ function buildArgs(p) {
   for (const d of GAME_DIRS) args.push('--mixdir=' + d);
   if (MAX_SURFACE_PIXELS > 0) args.push('--max-surface-pixels=' + MAX_SURFACE_PIXELS);
 
-  const fmt = p.format === 'jpg' ? 'jpg' : 'png';
-  args.push(fmt === 'jpg' ? '--output-jpg' : '--output-png');
+  const fmt = p.format === 'psd' ? 'psd' : (p.format === 'jpg' ? 'jpg' : 'png');
+  args.push(fmt === 'jpg' ? '--output-jpg' : (fmt === 'psd' ? '--output-psd' : '--output-png'));
   const pngLevel = clampInt(p.pngCompression, 1, 9, 4);
   const jpegQuality = clampInt(p.jpegQuality, 1, 100, 92);
   if (fmt === 'png') args.push('--png-compression=' + pngLevel);
-  else args.push('--jpeg-quality=' + jpegQuality);
+  else if (fmt === 'jpg') args.push('--jpeg-quality=' + jpegQuality);
 
   switch (p.sizeMode) {
     case 'local': args.push('--force-localsize'); break;
@@ -381,9 +382,10 @@ function buildArgs(p) {
   const metaFile = path.join(jobDir, 'meta.json');
   args.push('--meta-json=' + metaFile);
 
-  const ext = fmt === 'jpg' ? '.jpg' : '.png';
+  const ext = fmt === 'jpg' ? '.jpg' : (fmt === 'psd' ? '.psd' : '.png');
   const outFile = path.join(jobDir, 'render' + ext);
   const friendlyBase = displayName.replace(/\.(map|yrm|mpr)$/i, '') || 'map';
+  const mime = fmt === 'jpg' ? 'image/jpeg' : (fmt === 'psd' ? 'image/vnd.adobe.photoshop' : 'image/png');
   return {
     args,
     jobDir,
@@ -394,7 +396,7 @@ function buildArgs(p) {
     token,
     engine: p.engine || 'auto',
     name: friendlyBase + ext,
-    mime: fmt === 'jpg' ? 'image/jpeg' : 'image/png',
+    mime,
     url: '/image/' + token,
     downloadUrl: '/download/' + token,
   };

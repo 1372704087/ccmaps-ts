@@ -24,6 +24,7 @@ await build({
     'node:path': path.join(ROOT, 'src', 'webworker', 'path-shim.ts'),
     'node:zlib': path.join(ROOT, 'src', 'webworker', 'zlib-stub.ts'),
     'node:buffer': 'buffer',
+    'ag-psd': path.join(ROOT, 'src', 'webworker', 'ag-psd-stub.ts'),
   },
   inject: [path.join(ROOT, 'src', 'webworker', 'inject-globals.ts')],
 });
