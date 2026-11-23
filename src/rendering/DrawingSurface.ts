@@ -15,6 +15,22 @@ export enum SurfaceFormat {
   Bgra32 = 1,
 }
 
+/** One blit of an element (object) into its own RGBA patch, positioned in render space. */
+export interface ElementPart {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+}
+
+/** Art painted by one map object, so a PSD group can hold one layer per object. */
+export interface SurfaceElement {
+  name: string;
+  category: LayerCategory;
+  parts: ElementPart[];
+}
+
 export class DrawingSurface {
   readonly Format: SurfaceFormat;
   readonly Width: number;
@@ -45,13 +61,18 @@ export class DrawingSurface {
   MeasureOnly = false;
 
   /// <summary>Set for PSD export: allocates one byte per pixel recording which category painted
-  /// the final pixel. Categories are only written by passes that paint new art; shadow/alpha
-  /// passes leave the underlying category intact.</summary>
+  /// the final pixel, and keeps the pixels each object painted so non-terrain categories can be
+  /// split into one layer per element. Categories are only written by passes that paint new art;
+  /// shadow/alpha passes leave the underlying category intact.</summary>
   TrackCategories = false;
   CurrentCategory: LayerCategory = LayerCategory.None;
   /** When set, writes do not change the pixel's category (shadows, glows, highlights). */
   PreserveCategory = false;
   private _categories: Uint8Array | null = null;
+  private _layerPixels: Array<Uint8ClampedArray | null> = [];
+  private _element: SurfaceElement | null = null;
+  private _elements: SurfaceElement[] = [];
+  private _elementIndex = new Map<string, SurfaceElement>();
 
   // Attached animations are drawn once every object has been drawn. gamemd orders a scene
   // terrain -> buildings -> anims and puts anims last whatever their position, so an anim's
@@ -65,11 +86,15 @@ export class DrawingSurface {
   /// <summary>Queue an attached animation to be drawn once every object has been drawn.</summary>
   deferAnim(draw: () => void): void {
     const category = this.CurrentCategory;
+    const element = this._element;
     this._deferredAnims.push(() => {
       const previous = this.CurrentCategory;
+      const previousElement = this._element;
       this.CurrentCategory = category;
+      this._element = element;
       draw();
       this.CurrentCategory = previous;
+      this._element = previousElement;
     });
   }
 
@@ -81,11 +106,15 @@ export class DrawingSurface {
   /// <summary>Queue an AlphaImage glow to be applied once everything else is drawn.</summary>
   deferAlpha(draw: () => void): void {
     const category = this.CurrentCategory;
+    const element = this._element;
     this._deferredAlpha.push(() => {
       const previous = this.CurrentCategory;
+      const previousElement = this._element;
       this.CurrentCategory = category;
+      this._element = element;
       draw();
       this.CurrentCategory = previous;
+      this._element = previousElement;
     });
   }
 
@@ -148,6 +177,72 @@ export class DrawingSurface {
     return (this._categories ??= new Uint8Array(this.Width * this.Height));
   }
 
+  /// <summary>Full-surface RGBA buffer that accumulates every pixel this category paints, so
+  /// art hidden by a later category stays in its own layer instead of becoming a cutout. Only
+  /// terrain uses one now: other categories are split into one layer per element.</summary>
+  getCategoryLayer(category: LayerCategory): Uint8ClampedArray | null {
+    if (!this.TrackCategories || category !== LayerCategory.Terrain) return null;
+    return (this._layerPixels[category] ??= new Uint8ClampedArray(this.Width * this.Height * 4));
+  }
+
+  /// <summary>Hands the accumulated layer buffer to the exporter and drops the reference so the
+  /// pixels can be collected while the next layer is cropped.</summary>
+  takeCategoryLayer(category: LayerCategory): Uint8ClampedArray | null {
+    const pixels = this._layerPixels[category] ?? null;
+    this._layerPixels[category] = null;
+    return pixels;
+  }
+
+  /// <summary>The element (map object) currently being drawn, or null.</summary>
+  get CurrentElement(): SurfaceElement | null {
+    return this._element;
+  }
+
+  /// <summary>Starts collecting the art of one object. Elements are keyed by name, so a
+  /// later redraw of the same object (ore highlighting) updates its existing layer.</summary>
+  beginElement(name: string, category: LayerCategory): void {
+    if (!this.TrackCategories || category === LayerCategory.None) return;
+    const key = category + '\u0000' + name;
+    let element = this._elementIndex.get(key);
+    if (element == null) {
+      element = { name, category, parts: [] };
+      this._elementIndex.set(key, element);
+      this._elements.push(element);
+    }
+    this._element = element;
+  }
+
+  endElement(): void {
+    this._element = null;
+  }
+
+  /// <summary>Allocates an RGBA patch for one blit of the current element. The patch is kept in
+  /// sprite space, so pixels hidden by other art still make it into the object's own layer.</summary>
+  beginPart(left: number, top: number, width: number, height: number): ElementPart | null {
+    if (!this.TrackCategories || this._element == null) return null;
+    const w = Math.round(width);
+    const h = Math.round(height);
+    if (w <= 0 || h <= 0) return null;
+    const part: ElementPart = {
+      left: Math.round(left),
+      top: Math.round(top),
+      width: w,
+      height: h,
+      data: new Uint8ClampedArray(w * h * 4),
+    };
+    this._element.parts.push(part);
+    return part;
+  }
+
+  /// <summary>Hands the collected elements to the exporter and clears them.</summary>
+  takeElements(): SurfaceElement[] {
+    const elements = this._elements;
+    this._elements = [];
+    this._elementIndex.clear();
+    this._element = null;
+    return elements;
+  }
+
   setCategory(category: LayerCategory): void {
     this.CurrentCategory = category;
   }
@@ -157,6 +252,14 @@ export class DrawingSurface {
     if (this._categories == null || this.PreserveCategory) return;
     if (this.CurrentCategory === LayerCategory.None) return;
     this._categories[pixelIndex] = this.CurrentCategory;
+    const layer = this.getCategoryLayer(this.CurrentCategory);
+    if (layer == null) return;
+    const si = pixelIndex * this.BytesPerPixel;
+    const li = pixelIndex * 4;
+    layer[li] = this.data[si + 2];
+    layer[li + 1] = this.data[si + 1];
+    layer[li + 2] = this.data[si];
+    layer[li + 3] = 255;
   }
 
   // Writes an RGB triplet at a flat byte offset (offset.Y * Stride + offset.X * 3).

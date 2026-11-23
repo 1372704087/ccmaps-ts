@@ -41,7 +41,7 @@
     lightbox: $('lightbox'), lightboxImg: $('lightboxImg'), lightboxTitle: $('lightboxTitle'),
     lightboxClose: $('lightboxClose'), lightboxDownload: $('lightboxDownload'),
     lightboxBody: $('lightboxBody'), zoomPct: $('zoomPct'),
-    engineTag: $('engineTag'), langBtn: $('langBtn'),
+    engineTag: $('engineTag'), langBtn: $('langBtn'), langText: $('langText'),
     statusDot: $('statusDot'), statusText: $('statusText'),
     infoMaps: $('infoMaps'), infoRender: $('infoRender'),
   };
@@ -73,7 +73,7 @@
   let infoRequestSeq = 0;
   let currentImage = null;
   let renderStart = 0;
-  let lastStartArgs = [];
+  let lastStartEngine = 'auto';
   let blobUrl = null;
   let infoRenderEmpty = true;
   let br = null;
@@ -90,7 +90,7 @@
   const I18N = {
     zh: {
       'title': 'CNCMaps TS · 地图渲染器',
-      'langBtn': '🌐 English',
+      'langBtn': 'English',
       'themeToggle': '切换主题',
       'themeDark': '深色',
       'themeLight': '浅色',
@@ -114,8 +114,8 @@
       'modeHintServer': '地图会上传到服务器，使用服务器配置的游戏资源渲染',
       'srcLabelBrowser': '选择本地地图（不上传）',
       'srcLabelServer': '选择地图（上传本机地图文件）',
-      'uploadBtnBrowser': '📁 选择本地地图（可多选）',
-      'uploadBtnServer': '📁 上传地图文件（可多选）',
+      'uploadBtnBrowser': '选择本地地图（可多选）',
+      'uploadBtnServer': '上传地图文件（可多选）',
       'resLabelBrowser': '游戏资源（选择本机游戏目录，不上传）',
       'assetStateEmptyBrowser': '未选择游戏目录，浏览器渲染需要游戏资源',
       'assetLocalReady': '本地资源 {n} 个 · {size}（不上传）',
@@ -130,9 +130,9 @@
       'browserRenderFailed': '浏览器渲染失败',
       'localMapsAdded': '已选择 {n} 个本地地图（不上传）',
       'srcLabel': '选择地图（上传本机地图文件）',
-      'uploadBtn': '📁 上传地图文件（可多选）',
+      'uploadBtn': '上传地图文件（可多选）',
       'resLabel': '游戏资源（可选，远程部署时上传本机游戏目录）',
-      'gameDirBtn': '🎮 选择游戏目录',
+      'gameDirBtn': '选择游戏目录',
       'assetNoFiles': '所选目录中没有可用的游戏资源文件',
       'curLabel': '当前选择',
       'maplistEmpty': '请上传 .map / .yrm / .mpr 地图文件（支持多选）',
@@ -146,7 +146,7 @@
       'paramsTitle': '渲染参数',
       'lblFormat': '输出格式',
       'fmtPsd': 'PSD（分层）',
-      'psdHint': 'PSD 分层导出仅支持服务器模式，会按地形、建筑、步兵、载具、飞行器、海军、地形对象、覆盖物、污染物写入独立图层',
+      'psdHint': 'PSD 分层导出仅支持服务器模式，按地形、建筑、步兵、载具、飞行器、海军、地形对象、覆盖物、污染物建立图层组；地形组内为整图合并层，其余组内按对象拆分独立图层，名称优先取 CSF 本地化名并带格坐标（如 发电厂 (22,20)、灰熊坦克 (24,21)），无条目时回退 ID；覆盖物与污染物按类型合并',
       'psdServerOnly': 'PSD 分层导出仅支持服务器模式，请切换到服务器或使用 PNG/JPEG',
       'psdReady': 'PSD 已生成，点击下方按钮下载',
       'lblEngine': '引擎',
@@ -190,7 +190,7 @@
       'tglOre': '高亮矿石',
       'renderBtn': '开始渲染',
       'renderAllBtn': '全部渲染',
-      'downloadZip': '⬇ 下载 ZIP',
+      'downloadZip': '下载 ZIP',
       'batchRendering': '批量渲染 {i}/{total}：{name}',
       'batchDone': '批量渲染完成：成功 {ok} 张',
       'batchDoneFail': '批量渲染完成：成功 {ok} 张，失败 {fail} 张',
@@ -211,12 +211,12 @@
       'gameDirRestoreFail': '无法恢复上次的游戏目录，请重新选择',
       'renderStateIdle': '尚未渲染',
       'mapFirst': '请先选择地图',
-      'downloadOriginal': '⬇ 下载原图',
+      'downloadOriginal': '下载原图',
       'phaseWait': '等待开始',
       'prevTitle': '预览',
       'previewPlaceholder': '渲染完成后自动显示地图预览',
       'previewAlt': '地图预览',
-      'downloadImg': '⬇ 下载图片',
+      'downloadImg': '下载图片',
       'previewTip': '点击预览图可放大查看',
       'statusReady': '就绪',
       'creditHint': '（可点击跳转 GitHub）',
@@ -243,6 +243,8 @@
       'complete': '完成',
       'failCode': '失败 (code ',
       'renderFailed': '渲染失败',
+      'renderFailCode': '渲染失败（退出码 {code}）',
+      'renderTimeout': '渲染超时，已终止进程',
       'renderError': '渲染错误',
       'renderDone': '渲染完成',
       'errorPrefix': '错误：',
@@ -269,7 +271,7 @@
     },
     en: {
       'title': 'CNCMaps TS · Map Renderer',
-      'langBtn': '🌐 中文',
+      'langBtn': '中文',
       'themeToggle': 'Change theme',
       'themeDark': 'Dark',
       'themeLight': 'Light',
@@ -293,8 +295,8 @@
       'modeHintServer': 'Maps are uploaded and rendered with the server game resources',
       'srcLabelBrowser': 'Choose local maps (no upload)',
       'srcLabelServer': 'Choose maps (upload from this device)',
-      'uploadBtnBrowser': '📁 Choose Local Maps (multi)',
-      'uploadBtnServer': '📁 Upload Map Files (multi)',
+      'uploadBtnBrowser': 'Choose Local Maps (multi)',
+      'uploadBtnServer': 'Upload Map Files (multi)',
       'resLabelBrowser': 'Game resources (select a local game folder, no upload)',
       'assetStateEmptyBrowser': 'No game folder selected; browser rendering needs game resources',
       'assetLocalReady': 'Local assets: {n} files · {size} (not uploaded)',
@@ -309,9 +311,9 @@
       'browserRenderFailed': 'Browser render failed',
       'localMapsAdded': 'Selected {n} local maps (not uploaded)',
       'srcLabel': 'Choose a map (upload a local file)',
-      'uploadBtn': '📁 Upload Map Files (multi)',
+      'uploadBtn': 'Upload Map Files (multi)',
       'resLabel': 'Game resources (optional; upload a local game folder for remote servers)',
-      'gameDirBtn': '🎮 Select Game Folder',
+      'gameDirBtn': 'Select Game Folder',
       'assetNoFiles': 'No usable game asset files found in the selected folder',
       'curLabel': 'Current Selection',
       'maplistEmpty': 'Upload .map / .yrm / .mpr map files (multiple allowed)',
@@ -325,7 +327,7 @@
       'paramsTitle': 'Render Options',
       'lblFormat': 'Output Format',
       'fmtPsd': 'PSD (layers)',
-      'psdHint': 'Layered PSD export is server-only and writes terrain, buildings, infantry, vehicles, aircraft, naval, terrain objects, overlays and smudges as separate layers',
+      'psdHint': 'Layered PSD export is server-only: terrain, buildings, infantry, vehicles, aircraft, naval, terrain objects, overlays and smudges become layer groups. Terrain holds one merged map layer; the other groups split every object into its own layer, named with the game CSF name plus cell (e.g. Grizzly Tank (24,21)) and falling back to the internal ID; overlays and smudges merge by type',
       'psdServerOnly': 'Layered PSD export is server-only; switch to server mode or use PNG/JPEG',
       'psdReady': 'PSD ready — use the download button below',
       'lblEngine': 'Engine',
@@ -369,7 +371,7 @@
       'tglOre': 'Highlight Ore',
       'renderBtn': 'Start Render',
       'renderAllBtn': 'Render All',
-      'downloadZip': '⬇ Download ZIP',
+      'downloadZip': 'Download ZIP',
       'batchRendering': 'Rendering {i}/{total}: {name}',
       'batchDone': 'Batch complete: {ok} succeeded',
       'batchDoneFail': 'Batch complete: {ok} succeeded, {fail} failed',
@@ -390,12 +392,12 @@
       'gameDirRestoreFail': 'Could not restore the previous game folder; select it again',
       'renderStateIdle': 'Not rendered yet',
       'mapFirst': 'Select a map first',
-      'downloadOriginal': '⬇ Download original',
+      'downloadOriginal': 'Download original',
       'phaseWait': 'Waiting to start',
       'prevTitle': 'Preview',
       'previewPlaceholder': 'Map preview will appear after rendering',
       'previewAlt': 'map preview',
-      'downloadImg': '⬇ Download Image',
+      'downloadImg': 'Download Image',
       'previewTip': 'Click the preview to zoom in',
       'statusReady': 'Ready',
       'creditHint': '(click to open GitHub)',
@@ -423,6 +425,8 @@
       'complete': 'Done',
       'failCode': 'Failed (code ',
       'renderFailed': 'Render failed',
+      'renderFailCode': 'Render failed (exit code {code})',
+      'renderTimeout': 'Render timed out and was terminated',
       'renderError': 'Render error',
       'renderDone': 'Render complete',
       'errorPrefix': 'Error: ',
@@ -472,7 +476,7 @@
       cr.innerHTML = '<a href="https://github.com/zzattack/ccmaps-net" target="_blank" rel="noopener noreferrer">CNCMaps - NET</a>'
         + t('creditHint') + ' | CNCMaps TS · by 1372704087';
     }
-    els.langBtn.textContent = t('langBtn');
+    els.langText.textContent = t('langBtn');
     renderThemeMenu();
     updateThemeButton();
     els.appVersion.title = t('versionTitle') + ' ' + APP_VERSION;
@@ -1000,11 +1004,13 @@
       item.tabIndex = 0;
       item.setAttribute('role', 'button');
       item.setAttribute('aria-label', m.name);
-      item.innerHTML = '<span class="ic">📤</span><span class="nm"></span><span class="sz"></span>';
+      item.innerHTML = '<span class="ic"></span><span class="nm"></span><span class="sz"></span>';
       item.querySelector('.nm').textContent = m.name;
       const isLocalOnly = m.file && !m.uploadToken;
       item.querySelector('.sz').textContent = isLocalOnly ? t('browserBadge') : fmtSize(m.size);
-      item.querySelector('.ic').textContent = m.file ? '📄' : '📤';
+      item.querySelector('.ic').innerHTML = m.file
+        ? '<svg class="icon"><use href="#i-file"/></svg>'
+        : '<svg class="icon"><use href="#i-upload"/></svg>';
       item.onclick = () => { if (!renderBusy && !batchBusy) selectMap(m); };
       item.onkeydown = (e) => {
         if (e.target !== item || e.key !== 'Enter' && e.key !== ' ') return;
@@ -1587,13 +1593,13 @@
   }
 
   let lastFocus = null;
-  function openLightbox(url, name) {
+  function openLightbox(url, name, downloadUrl) {
     if (els.lightbox.hidden) lastFocus = document.activeElement;
     els.lightboxImg.src = url;
     els.lightboxTitle.textContent = name || t('lightboxTitle');
-    els.lightboxDownload.href = url.includes('/image/')
+    els.lightboxDownload.href = downloadUrl || (url.includes('/image/')
       ? url.replace('/image/', '/download/')
-      : url;
+      : url);
     els.lightboxDownload.download = name || '';
     els.lightbox.hidden = false;
     zoom = 1;
@@ -1617,7 +1623,7 @@
     if (idx === -1) idx = 0;
     const next = renderHistory[(idx + delta + renderHistory.length) % renderHistory.length];
     selectHistoryItem(next);
-    if (!els.lightbox.hidden) openLightbox(next.url, next.name);
+    if (!els.lightbox.hidden) openLightbox(next.url, next.name, next.downloadUrl);
   }
 
   // ---- lightbox zoom / pan ----
@@ -1947,8 +1953,8 @@
             setProgress(0, tf('queuedPos', { pos: evt.position }));
             els.renderState.textContent = tf('queuedPos', { pos: evt.position });
           } else if (evt.type === 'start') {
-            els.engineTag.textContent = t('enginePrefix') + argvShort(evt.args);
-            lastStartArgs = evt.args;
+            lastStartEngine = evt.engine || 'auto';
+            els.engineTag.textContent = t('enginePrefix') + engineShort(lastStartEngine);
           } else if (evt.type === 'progress') {
             lastProgress = evt.percent;
             setProgress(evt.percent, phaseLabel(evt.phase));
@@ -1969,13 +1975,17 @@
               setProgress(100, t('complete'));
               const isPsd = /\.psd$/i.test(evt.name || '');
               if (isPsd) {
-                currentImage = null;
-                els.previewImg.style.display = 'none';
-                els.previewImg.removeAttribute('src');
-                els.placeholder.style.display = '';
-                const ph = els.placeholder.querySelector('p');
-                if (ph) ph.textContent = t('psdReady');
-                els.previewMeta.textContent = evt.name;
+                currentImage = { url: evt.previewUrl || null, name: evt.name, downloadUrl: evt.downloadUrl };
+                if (evt.previewUrl) {
+                  showPreview(evt.previewUrl, evt.name);
+                } else {
+                  els.previewImg.style.display = 'none';
+                  els.previewImg.removeAttribute('src');
+                  els.placeholder.style.display = '';
+                  const ph = els.placeholder.querySelector('p');
+                  if (ph) ph.textContent = t('psdReady');
+                  els.previewMeta.textContent = evt.name;
+                }
               } else {
                 currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
                 showPreview(evt.url, evt.name);
@@ -1989,7 +1999,7 @@
               const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
               infoRenderEmpty = false;
               els.infoRender.textContent = t('recentPrefix') + (evt.name || '') + ' · ' +
-                argvShort(lastStartArgs) + ' · ' + dur;
+                engineShort(lastStartEngine) + ' · ' + dur;
               els.renderState.textContent = t('renderDone');
               setStatus('ok', t('complete'));
               renderToast(t('renderDone') + ' · ' + evt.name, 'ok');
@@ -1999,12 +2009,14 @@
                 ok: true,
                 downloadUrl: evt.downloadUrl,
                 name: evt.name,
-                engine: engineFromArgs(lastStartArgs),
+                engine: engineFromEngine(lastStartEngine),
                 width: Number.isFinite(metaWidth) && metaWidth > 0 ? metaWidth : undefined,
                 height: Number.isFinite(metaHeight) && metaHeight > 0 ? metaHeight : undefined,
               };
             } else {
-              const failText = (evt.message || t('renderFailed')) + (evt.code != null ? ' (code ' + evt.code + ')' : '');
+              const failText = evt.timedOut
+                ? t('renderTimeout')
+                : (evt.code != null ? tf('renderFailCode', { code: evt.code }) : (evt.message || t('renderFailed')));
               lastRenderResult = { ok: false, error: new Error(failText) };
               setProgress(lastProgress, t('failCode') + evt.code + ')');
               appendLog(failText, 'error');
@@ -2394,21 +2406,14 @@
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
-  function engineFromArgs(args) {
-    const forced = (args || []).find((a) => a.startsWith('--force-'));
-    if (!forced) return 'AUTO';
-    const m = { ra2: 'RA2', yr: 'YR', ts: 'TS', fs: 'FS' };
-    return m[forced.replace('--force-', '')] || 'AUTO';
+  function engineShort(engine) {
+    const keys = { ra2: 'engineRA2', yr: 'engineYR', ts: 'engineTS', fs: 'engineFS' };
+    return keys[engine] ? t(keys[engine]) : t('engineAuto');
   }
 
-  function argvShort(args) {
-    const forced = args.find((a) => a.startsWith('--force-'));
-    if (forced) {
-      const keys = { ra2: 'engineRA2', yr: 'engineYR', ts: 'engineTS', fs: 'engineFS' };
-      const k = forced.replace('--force-', '');
-      return keys[k] ? t(keys[k]) : k;
-    }
-    return t('engineAuto');
+  function engineFromEngine(engine) {
+    const m = { ra2: 'RA2', yr: 'YR', ts: 'TS', fs: 'FS' };
+    return m[engine] || 'AUTO';
   }
 
   function phaseLabel(p) {
@@ -2888,7 +2893,7 @@
       a.remove();
     }
   };
-  els.previewImg.onclick = () => { if (currentImage) openLightbox(currentImage.url, currentImage.name); };
+  els.previewImg.onclick = () => { if (currentImage && currentImage.url) openLightbox(currentImage.url, currentImage.name, currentImage.downloadUrl); };
   els.lightboxClose.onclick = closeLightbox;
   els.lightbox.addEventListener('click', (e) => { if (e.target === els.lightbox) closeLightbox(); });
   els.lightbox.querySelectorAll('.zbtn').forEach((b) => {

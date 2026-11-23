@@ -27,6 +27,7 @@ import { TileLayer, TileDirection } from './TileLayer.js';
 import { MapTile } from './MapTile.js';
 import {
   GameObject,
+  NamedObject,
   OwnableObject,
   AircraftObject,
   InfantryObject,
@@ -37,6 +38,7 @@ import {
   TerrainObject,
   UnitObject,
 } from './GameObjects.js';
+import { CsfFile } from '../../formats/CsfFile.js';
 import { SpecialOverlays } from '../game/SpecialOverlays.js';
 import { PaletteCollection } from '../game/PaletteCollection.js';
 import { GameCollectionLike } from '../game/Theater.js';
@@ -112,6 +114,9 @@ export class MapRenderer {
   private _drawingSurface!: DrawingSurface;
   private _mapFile!: MapFile;
   private _overlaysAltered = false;
+  /** CSF string table, used only for PSD layer names (localized object names). */
+  private _csf: CsfFile | null = null;
+  private readonly _displayNames = new Map<string, string>();
 
   Initialize(mf: MapFile, config: ModConfig, vfs: VirtualFileSystem): boolean {
     this._mapFile = mf;
@@ -323,7 +328,24 @@ export class MapRenderer {
       );
       return false;
     }
+
+    // PSD layer names prefer the localized object name from the game's string table.
+    if (this.TrackCategories && this._config.Engine >= EngineType.RedAlert2) {
+      const csfFile = this._config.Engine === EngineType.YurisRevenge ? 'ra2md.csf' : 'ra2.csf';
+      this._csf = this._vfs.openFile(csfFile) as unknown as CsfFile | null;
+    }
     return true;
+  }
+
+  /** `Name:<ID>` from the game CSF, or the internal ID when the table has no entry. */
+  private DisplayName(id: string): string {
+    if (id === '' || this._csf == null) return id;
+    const cached = this._displayNames.get(id);
+    if (cached != null) return cached;
+    const value = this._csf.getValue('Name:' + id);
+    const name = value.trim() !== '' ? value : id;
+    this._displayNames.set(id, name);
+    return name;
   }
 
   private LoadCustomInis(fileNames: string[]): IniFile {
@@ -936,7 +958,7 @@ export class MapRenderer {
           const t = this._tiles.GetTileR(x, y);
           if (t == null) continue;
           const objs = this.GetObjectsAt(t.Dx, Math.trunc(t.Dy / 2));
-          for (const o of objs) this._theater.Draw(o, this._drawingSurface);
+          for (const o of objs) this.DrawObjectElement(o);
         }
       }
     }
@@ -1274,14 +1296,14 @@ export class MapRenderer {
         const tile = this._tiles.GetTile(x, y);
         if (tile != null && this.InBand(tile, 240) && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a))) {
           const objs = this.GetObjectsAt(x, y);
-          for (const o of objs) this._theater.Draw(o, this._drawingSurface);
+          for (const o of objs) this.DrawObjectElement(o);
         }
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
         if (tile != null && this.InBand(tile, 240) && tile.AllObjects.some((a) => a instanceof OverlayObject && checkFunc(a))) {
           const objs = this.GetObjectsAt(x, y);
-          for (const o of objs) this._theater.Draw(o, this._drawingSurface);
+          for (const o of objs) this.DrawObjectElement(o);
         }
       }
     }
@@ -1365,12 +1387,12 @@ export class MapRenderer {
       for (let x = 1; x <= this.FullSize.Width * 2 - 3; x += 2) {
         const tile = this._tiles.GetTile(x, y);
         if (tile != null && this.InBand(tile, 240))
-          for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
+          for (const o of tile.AllObjects) if (o instanceof TerrainObject) this.DrawObjectElement(o);
       }
       for (let x = 0; x <= this.FullSize.Width * 2 - 2; x += 2) {
         const tile = this._tiles.GetTile(x, y);
         if (tile != null && this.InBand(tile, 240))
-          for (const o of tile.AllObjects) if (o instanceof TerrainObject) this._theater.Draw(o, this._drawingSurface);
+          for (const o of tile.AllObjects) if (o instanceof TerrainObject) this.DrawObjectElement(o);
       }
     }
     logger.info('Terrain objects drawn');
@@ -1383,16 +1405,14 @@ export class MapRenderer {
         const tile = this._tiles.GetTile(x, y);
         if (tile == null || !this.InBand(tile, 420)) continue;
         for (const o of tile.DrawObjects) {
-          this._drawingSurface.setCategory(this.CategoryForObject(o));
-          this._theater.Draw(o, this._drawingSurface);
+          this.DrawObjectElement(o);
         }
       }
       for (let x = this.FullSize.Width * 2 - 3; x >= 0; x -= 2) {
         const tile = this._tiles.GetTile(x, y);
         if (tile == null || !this.InBand(tile, 420)) continue;
         for (const o of tile.DrawObjects) {
-          this._drawingSurface.setCategory(this.CategoryForObject(o));
-          this._theater.Draw(o, this._drawingSurface);
+          this.DrawObjectElement(o);
         }
       }
 
@@ -1455,8 +1475,7 @@ export class MapRenderer {
     this._theater.Draw(tile, this._drawingSurface);
     for (const o of tile.AllObjects) {
       if (o instanceof SmudgeObject) {
-        this._drawingSurface.setCategory(LayerCategory.Smudge);
-        this._theater.Draw(o, this._drawingSurface);
+        this.DrawObjectElement(o);
       }
     }
   }
@@ -1464,8 +1483,7 @@ export class MapRenderer {
   private DrawCellPass(tile: MapTile | null): void {
     if (tile == null) return;
     if (!this.InBand(tile, 240)) return;
-    this._drawingSurface.setCategory(LayerCategory.Overlay);
-    for (const o of tile.AllObjects) if (o instanceof OverlayObject) this._theater.Draw(o, this._drawingSurface);
+    for (const o of tile.AllObjects) if (o instanceof OverlayObject) this.DrawObjectElement(o);
   }
 
   /** PSD category for a techno/terrain object in the object pass. */
@@ -1478,6 +1496,39 @@ export class MapRenderer {
     if (o instanceof OverlayObject) return LayerCategory.Overlay;
     if (o instanceof SmudgeObject) return LayerCategory.Smudge;
     return LayerCategory.Terrain;
+  }
+
+  /** Draws one object. For PSD export every non-terrain object also collects its own art in a
+   * layer inside its category group, instead of merging into one category layer. */
+  private DrawObjectElement(o: GameObject): void {
+    const ds = this._drawingSurface;
+    const category = this.CategoryForObject(o);
+    ds.setCategory(category);
+    if (category === LayerCategory.Terrain) {
+      this._theater.Draw(o, ds);
+      return;
+    }
+    ds.beginElement(this.ElementName(o), category);
+    try {
+      this._theater.Draw(o, ds);
+    } finally {
+      ds.endElement();
+    }
+  }
+
+  /** Layer name inside a category group. Techno and terrain objects carry their cell so two
+   * objects of the same type stay separate; the name itself is the game's localized
+   * `Name:<ID>` string when the CSF has one, and overlays and smudges merge by type so a
+   * field of ore does not become thousands of one-cell layers. */
+  private ElementName(o: GameObject): string {
+    if (o instanceof OverlayObject) return o.Drawable?.Name || `Overlay ${o.OverlayID}`;
+    if (o instanceof SmudgeObject) return o.Name;
+    if (o instanceof NamedObject) {
+      const t = o.Tile;
+      const name = this.DisplayName(o.Name);
+      return t != null ? `${name} (${t.Rx},${t.Ry})` : name;
+    }
+    return 'Object';
   }
 
   GeneratePreviewPack(previewMarkers: PreviewMarkersType, sizeMode: SizeMode, map: IniFile, fixDimensions: boolean): void {

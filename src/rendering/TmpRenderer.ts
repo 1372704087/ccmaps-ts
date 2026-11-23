@@ -71,6 +71,7 @@ export class TmpRenderer {
     const stride = ds.Stride;
     const data = ds.data;
     const categories = ds.getCategories();
+    const layer = ds.getCategoryLayer(ds.CurrentCategory);
     const category = ds.CurrentCategory;
 
     const halfCx = Math.trunc(tmp.BlockWidth / 2);
@@ -82,6 +83,12 @@ export class TmpRenderer {
     // moves into surface space
     const oy = offset.Y - ds.OriginY;
     const ox = offset.X - ds.OriginX;
+    const elementPart = ds.beginPart(
+      ox,
+      oy,
+      Math.max(tmp.BlockWidth, img.hasExtraData ? tmp.BlockWidth + img.ExtraWidth : tmp.BlockWidth),
+      tmp.BlockHeight + (img.hasExtraData ? img.ExtraHeight : 0),
+    );
     let w = stride * oy + (ox + halfCx - 2) * 3;
 
     let rIdx = 0, x = 0, y = 0;
@@ -104,6 +111,24 @@ export class TmpRenderer {
           data[w + 2] = bgr[ci + 2];
           if (useZ) zBuffer[zIdx] = zBufVal;
           if (categories != null) categories[zIdx] = category;
+          if (layer != null) {
+            const li = zIdx * 4;
+            layer[li] = bgr[ci + 2];
+            layer[li + 1] = bgr[ci + 1];
+            layer[li + 2] = bgr[ci];
+            layer[li + 3] = 255;
+          }
+          if (elementPart != null) {
+            const px = (zIdx % ds.Width) - ox;
+            const py = ((zIdx / ds.Width) | 0) - oy;
+            if (px >= 0 && px < elementPart.width && py >= 0 && py < elementPart.height) {
+              const pi = (py * elementPart.width + px) * 4;
+              elementPart.data[pi] = bgr[ci + 2];
+              elementPart.data[pi + 1] = bgr[ci + 1];
+              elementPart.data[pi + 2] = bgr[ci];
+              elementPart.data[pi + 3] = 255;
+            }
+          }
         }
         w += 3;
         zIdx++;
@@ -127,6 +152,24 @@ export class TmpRenderer {
           data[w + 2] = bgr[ci + 2];
           if (useZ) zBuffer[zIdx] = zBufVal;
           if (categories != null) categories[zIdx] = category;
+          if (layer != null) {
+            const li = zIdx * 4;
+            layer[li] = bgr[ci + 2];
+            layer[li + 1] = bgr[ci + 1];
+            layer[li + 2] = bgr[ci];
+            layer[li + 3] = 255;
+          }
+          if (elementPart != null) {
+            const px = (zIdx % ds.Width) - ox;
+            const py = ((zIdx / ds.Width) | 0) - oy;
+            if (px >= 0 && px < elementPart.width && py >= 0 && py < elementPart.height) {
+              const pi = (py * elementPart.width + px) * 4;
+              elementPart.data[pi] = bgr[ci + 2];
+              elementPart.data[pi + 1] = bgr[ci + 1];
+              elementPart.data[pi + 2] = bgr[ci];
+              elementPart.data[pi + 3] = 255;
+            }
+          }
         }
         w += 3;
         zIdx++;
@@ -183,6 +226,24 @@ export class TmpRenderer {
           data[w + 2] = bgr[ci + 2];
           zBuffer[zIdx] = zBufVal;
           if (categories != null) categories[zIdx] = category;
+          if (layer != null) {
+            const li = zIdx * 4;
+            layer[li] = bgr[ci + 2];
+            layer[li + 1] = bgr[ci + 1];
+            layer[li + 2] = bgr[ci];
+            layer[li + 3] = 255;
+          }
+          if (elementPart != null) {
+            const px = (zIdx % ds.Width) - ox;
+            const py = ((zIdx / ds.Width) | 0) - oy;
+            if (px >= 0 && px < elementPart.width && py >= 0 && py < elementPart.height) {
+              const pi = (py * elementPart.width + px) * 4;
+              elementPart.data[pi] = bgr[ci + 2];
+              elementPart.data[pi + 1] = bgr[ci + 1];
+              elementPart.data[pi + 2] = bgr[ci];
+              elementPart.data[pi + 3] = 255;
+            }
+          }
           w += 3;
         } else {
           w += 3;

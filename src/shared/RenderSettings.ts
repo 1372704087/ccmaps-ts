@@ -13,6 +13,9 @@ export class RenderSettings {
   SaveJPEG = false;
   /** Write a layered PSD (one layer per object category) instead of a flat PNG/JPEG. */
   SavePSD = false;
+  /** With SavePSD, also write a flattened <name>.preview.png next to the PSD so browsers
+   * (which cannot decode PSD) can show a preview. */
+  PsdPreview = false;
   PNGQuality = 4; // deflate level; with unfiltered scanlines this compresses game graphics best for its speed
   JPEGCompression = 95;
   MixFilesDirectories: string[] = [];
@@ -146,6 +149,7 @@ export class RenderSettings {
     });
     registerFlag(['--output-png', '-p'], 'Output PNG file', () => (this.SavePNG = true));
     registerFlag(['--output-psd'], 'Output a layered PSD (terrain, buildings, infantry, vehicles, aircraft, naval, terrain objects, overlays, smudges)', () => (this.SavePSD = true));
+    registerFlag(['--psd-preview'], 'With --output-psd, also write a flattened PNG preview (<name>.preview.png)', () => (this.PsdPreview = true));
     registerValue(['--png-compression', '-c'], 'Set PNG compression level (1-9)', (v) => {
       const n = parseInt(v, 10);
       // zlib throws RangeError outside 0..9; a bad CLI/API value must not kill the render.

@@ -88,6 +88,7 @@ export class VoxelDrawable extends Drawable {
     const shadowBufVxl = vxl_ds.getShadows();
     const voxelMask = ds.getVoxelMask();
     const categories = ds.getCategories();
+    const layer = ds.getCategoryLayer(ds.CurrentCategory);
     const category = ds.CurrentCategory;
 
     let firstDrawnRow = Number.MAX_VALUE;
@@ -125,6 +126,14 @@ export class VoxelDrawable extends Drawable {
     const a = transLucency / 100;
     const b = 1 - a;
 
+    const shadowPart = ds.beginPart(d.X - ds.OriginX, d.Y - ds.OriginY, vxl_ds.Width, vxl_ds.Height);
+    const elementPart = ds.beginPart(
+      d.X - ds.OriginX,
+      d.Y - ds.OriginY - flight,
+      vxl_ds.Width,
+      vxl_ds.Height,
+    );
+
     for (let y = 0; y < vxl_ds.Height; y++) {
       const srcRowBase = vxl_ds.Stride * y;
       // banded surfaces hold one strip of the map: z stays in map coordinates, the write cursor
@@ -145,22 +154,41 @@ export class VoxelDrawable extends Drawable {
         const srcBase = srcRowBase + x * 4;
         const bodyPx = vxl_ds.data[srcBase + 3] > 0;
         // only non-transparent pixels in front of what the buffer holds
-        if (bodyPx && bodyRowValid && zBufVal > zBuffer[zIdx]) {
+        if (bodyPx && bodyRowValid) {
           const wIdx = bodyRowBase + x * 3;
           const srcB = vxl_ds.data[srcBase];
           const srcG = vxl_ds.data[srcBase + 1];
           const srcR = vxl_ds.data[srcBase + 2];
-          if (transLucency !== 0) {
-            ds.data[wIdx] = Math.trunc(a * ds.data[wIdx] + b * srcB);
-            ds.data[wIdx + 1] = Math.trunc(a * ds.data[wIdx + 1] + b * srcG);
-            ds.data[wIdx + 2] = Math.trunc(a * ds.data[wIdx + 2] + b * srcR);
-          } else {
-            ds.data[wIdx] = srcB;
-            ds.data[wIdx + 1] = srcG;
-            ds.data[wIdx + 2] = srcR;
+          if (zBufVal > zBuffer[zIdx]) {
+            if (transLucency !== 0) {
+              ds.data[wIdx] = Math.trunc(a * ds.data[wIdx] + b * srcB);
+              ds.data[wIdx + 1] = Math.trunc(a * ds.data[wIdx + 1] + b * srcG);
+              ds.data[wIdx + 2] = Math.trunc(a * ds.data[wIdx + 2] + b * srcR);
+            } else {
+              ds.data[wIdx] = srcB;
+              ds.data[wIdx + 1] = srcG;
+              ds.data[wIdx + 2] = srcR;
+            }
+            if (categories != null) categories[zIdx] = category;
+            if (voxelMask != null) voxelMask[zIdx] = 1;
+            // Only pixels the game actually wrote go into the layer; kept z-rejected pixels
+            // would stack a hidden body above the sprite the game shows.
+            const sx = ox + x;
+            if (layer != null && sx >= 0 && sx < ds.Width) {
+              const li = zIdx * 4;
+              layer[li] = srcR;
+              layer[li + 1] = srcG;
+              layer[li + 2] = srcB;
+              layer[li + 3] = 255;
+            }
+            if (elementPart != null) {
+              const pi = (y * vxl_ds.Width + x) * 4;
+              elementPart.data[pi] = srcR;
+              elementPart.data[pi + 1] = srcG;
+              elementPart.data[pi + 2] = srcB;
+              elementPart.data[pi + 3] = 255;
+            }
           }
-          if (categories != null) categories[zIdx] = category;
-          if (voxelMask != null) voxelMask[zIdx] = 1;
         }
         // shadows lie on the caster's ground plane and darken only where that
         // plane is in front of the buffer; the body pixels drawn by this same
@@ -172,6 +200,14 @@ export class VoxelDrawable extends Drawable {
             ds.data[swIdx] = Math.trunc(ds.data[swIdx] / 2);
             ds.data[swIdx + 1] = Math.trunc(ds.data[swIdx + 1] / 2);
             ds.data[swIdx + 2] = Math.trunc(ds.data[swIdx + 2] / 2);
+            // Keep only the shadow the game actually drew with the unit in the PSD.
+            if (shadowPart != null) {
+              const pi = (y * vxl_ds.Width + x) * 4;
+              shadowPart.data[pi] = 0;
+              shadowPart.data[pi + 1] = 0;
+              shadowPart.data[pi + 2] = 0;
+              shadowPart.data[pi + 3] = 128;
+            }
           }
         }
         zIdx++;

@@ -10,10 +10,14 @@ function blendPixel(ds: DrawingSurface, x: number, y: number, r: number, g: numb
   if (x < 0 || y < 0 || x >= ds.Width || y >= ds.Height) return;
   const a = alpha / 255.0;
   const inv = 1.0 - a;
-  const idx = (x + y * ds.Width) * 3;
+  const pixel = x + y * ds.Width;
+  const idx = pixel * 3;
   ds.data[idx] = Math.trunc(b * a + ds.data[idx] * inv);
   ds.data[idx + 1] = Math.trunc(g * a + ds.data[idx + 1] * inv);
   ds.data[idx + 2] = Math.trunc(r * a + ds.data[idx + 2] * inv);
+  // Start markers and tunnel lines are terrain annotations; keep them in the PSD terrain
+  // layer now that object shadows no longer live there.
+  ds.markCategory(pixel);
 }
 
 export function fillRect(
@@ -234,6 +238,7 @@ export function drawImage(ds: DrawingSurface, img: RgbaImage, x: number, y: numb
       ds.data[di] = Math.trunc(img.Data[idx + 2] * srcA + ds.data[di] * inv);
       ds.data[di + 1] = Math.trunc(img.Data[idx + 1] * srcA + ds.data[di + 1] * inv);
       ds.data[di + 2] = Math.trunc(img.Data[idx] * srcA + ds.data[di + 2] * inv);
+      ds.markCategory(sx + sy * ds.Width);
     }
   }
 }

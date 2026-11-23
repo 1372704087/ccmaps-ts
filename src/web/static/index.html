@@ -20,6 +20,17 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<svg xmlns="http://www.w3.org/2000/svg" class="svg-sprite" aria-hidden="true">
+  <defs>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></symbol>
+    <symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M6 8h12a4 4 0 0 1 3.8 5.2l-1 3a2.5 2.5 0 0 1-4.3 1L15 15H9l-1.5 2.2a2.5 2.5 0 0 1-4.3-1l-1-3A4 4 0 0 1 6 8z"/><path d="M8 11v3M6.5 12.5h3M15.5 11.5h.01M17.5 13.5h.01"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" fill="currentColor" stroke="none"/></symbol>
+  </defs>
+</svg>
 <div class="glow glow-a"></div>
 <div class="glow glow-b"></div>
 <div class="bg-grid" aria-hidden="true"></div>
@@ -40,7 +51,7 @@
       <button id="themeBtn" class="theme-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="切换主题" title="切换主题"><span class="theme-dot" aria-hidden="true"></span></button>
       <div id="themeMenu" class="theme-menu" role="listbox" aria-label="主题" hidden></div>
     </div>
-    <button id="langBtn" class="lang-btn">🌐 English</button>
+    <button id="langBtn" class="lang-btn"><svg class="icon"><use href="#i-globe"/></svg><span id="langText">English</span></button>
     <div class="engine-tag" id="engineTag">引擎 · 自动</div>
   </div>
 </header>
@@ -60,7 +71,7 @@
 
     <label class="field-label" id="srcLabel" data-i18n="srcLabel">选择地图（上传本机地图文件）</label>
     <div class="row">
-      <button id="uploadBtn" class="btn btn-ghost upload-lg"><span data-i18n="uploadBtn">📁 上传地图文件（可多选）</span></button>
+      <button id="uploadBtn" class="btn btn-ghost upload-lg"><svg class="icon"><use href="#i-upload"/></svg><span data-i18n="uploadBtn">选择本地地图（可多选）</span></button>
     </div>
     <input id="fileInput" type="file" accept=".map,.yrm,.mpr" multiple hidden>
 
@@ -84,7 +95,7 @@
     <div id="gameResSection">
       <label class="field-label" id="resLabel" data-i18n="resLabel">游戏资源（选择本机游戏目录，不上传）</label>
       <div class="row">
-        <button id="gameDirBtn" class="btn btn-ghost upload-lg"><span data-i18n="gameDirBtn">🎮 选择游戏目录</span></button>
+        <button id="gameDirBtn" class="btn btn-ghost upload-lg"><svg class="icon"><use href="#i-gamepad"/></svg><span data-i18n="gameDirBtn">选择游戏目录</span></button>
       </div>
       <input id="gameDirInput" type="file" webkitdirectory directory multiple hidden>
       <div class="asset-state" id="assetState" data-i18n="assetStateEmptyBrowser">未选择游戏目录，浏览器渲染需要游戏资源</div>
@@ -234,10 +245,10 @@
 
     <div class="render-zone">
       <button id="renderBtn" class="btn btn-primary" disabled>
-        <span class="play">▶</span> <span data-i18n="renderBtn">开始渲染</span>
+        <svg class="icon play"><use href="#i-play"/></svg> <span data-i18n="renderBtn">开始渲染</span>
       </button>
       <button id="renderAllBtn" class="btn btn-ghost" disabled><span data-i18n="renderAllBtn">全部渲染</span></button>
-      <button id="zipBtn" class="btn btn-ghost" disabled><span data-i18n="downloadZip">⬇ 下载 ZIP</span></button>
+      <button id="zipBtn" class="btn btn-ghost" disabled><svg class="icon"><use href="#i-download"/></svg><span data-i18n="downloadZip">下载 ZIP</span></button>
       <button id="cancelBtn" class="btn btn-ghost" hidden><span data-i18n="cancelBtn">取消</span></button>
       <div class="render-state" id="renderState" data-i18n="renderStateIdle" aria-live="polite">尚未渲染</div>
     </div>
@@ -262,13 +273,13 @@
     <h2 class="panel-title"><span>03</span><span data-i18n="prevTitle">预览</span></h2>
     <div class="preview-frame" id="previewFrame">
       <div class="placeholder" id="placeholder">
-        <div class="ph-icon">🛰</div>
+        <div class="ph-icon"><svg class="icon"><use href="#i-image"/></svg></div>
         <p data-i18n="previewPlaceholder">渲染完成后自动显示地图预览</p>
       </div>
       <img id="previewImg" alt="" data-i18n-alt="previewAlt" data-i18n-prevalt="1" style="display:none">
     </div>
     <div class="preview-tools">
-      <button id="downloadBtn" class="btn btn-ghost" disabled><span data-i18n="downloadImg">⬇ 下载图片</span></button>
+      <button id="downloadBtn" class="btn btn-ghost" disabled><svg class="icon"><use href="#i-download"/></svg><span data-i18n="downloadImg">下载图片</span></button>
       <span class="preview-tip" data-i18n="previewTip">点击预览图可放大查看</span>
     </div>
     <div class="preview-meta" id="previewMeta"></div>
@@ -311,7 +322,7 @@
         <button class="zbtn" data-zoom="fit" title="适应窗口" data-i18n-title="zoomFit">适应</button>
         <button class="zbtn" data-zoom="1" title="实际大小" data-i18n-title="zoom100">100%</button>
       </div>
-      <a class="btn btn-primary" id="lightboxDownload" href="#" download data-i18n="downloadOriginal">⬇ 下载原图</a>
+      <a class="btn btn-primary" id="lightboxDownload" href="#" download><svg class="icon"><use href="#i-download"/></svg><span data-i18n="downloadOriginal">下载原图</span></a>
     </div>
   </div>
 </div>

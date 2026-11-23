@@ -182,6 +182,7 @@ export class ShpRenderer {
 
     const data = ds.data;
     const categories = ds.getCategories();
+    const layer = ds.getCategoryLayer(ds.CurrentCategory);
     const category = ds.CurrentCategory;
     const wLow = 0;
     const wHigh = stride * ds.Height;
@@ -189,6 +190,7 @@ export class ShpRenderer {
     // everything that decides depth and only moves the write cursor into surface space
     const ox = offset.X - ds.OriginX;
     const oy = offset.Y - ds.OriginY;
+    const elementPart = ds.beginPart(ox, oy, img.Width, img.Height);
     let w = ox * 3 + stride * oy;
 
     // clip to 25-50-75-100
@@ -304,8 +306,9 @@ export class ShpRenderer {
           zBufVal = toShort(zBufVal);
 
           // the RLE blitters draw only a strictly nearer pixel: ties keep the earlier drawing
-          if (w >= wLow && w < wHigh && (plainBlit || zBufVal > zBuffer[zIdx])) {
-            const ci = paletteValue * 3;
+          const inBounds = w >= wLow && w < wHigh;
+          const ci = paletteValue * 3;
+          if (inBounds && (plainBlit || zBufVal > zBuffer[zIdx])) {
             if (transLucency !== 0) {
               data[w] = Math.trunc(a * data[w] + blendB * bgr[ci]);
               data[w + 1] = Math.trunc(a * data[w + 1] + blendB * bgr[ci + 1]);
@@ -319,6 +322,23 @@ export class ShpRenderer {
               if (!isAnim && !plainBlit) zBuffer[zIdx] = zBufVal;
             }
             if (categories != null) categories[zIdx] = category;
+            // The layer keeps the art the game actually drew. Pixels that lost the z-test were
+            // never painted, and keeping them would put a later-drawn (but occluded) sprite
+            // above the one the game shows.
+            if (layer != null) {
+              const li = zIdx * 4;
+              layer[li] = bgr[ci + 2];
+              layer[li + 1] = bgr[ci + 1];
+              layer[li + 2] = bgr[ci];
+              layer[li + 3] = 255;
+            }
+            if (elementPart != null) {
+              const pi = (y * img.Width + x) * 4;
+              elementPart.data[pi] = bgr[ci + 2];
+              elementPart.data[pi + 1] = bgr[ci + 1];
+              elementPart.data[pi + 2] = bgr[ci];
+              elementPart.data[pi + 3] = 255;
+            }
           }
         }
 
@@ -369,6 +389,9 @@ export class ShpRenderer {
     const stride = ds.Stride;
     const zBuffer = ds.getZBuffer();
     const data = ds.data;
+    // PSD export keeps the shadow with its caster: a black, half-opaque patch (the game
+    // darkens the ground by half) written into the object's own layer.
+    const shadowPart = ds.beginPart(offset.X - ds.OriginX, offset.Y - ds.OriginY, img.Width, img.Height);
 
     let w = (offset.X - ds.OriginX) * 3 + stride * (offset.Y - ds.OriginY);
     let zIdx = offset.X - ds.OriginX + (offset.Y - ds.OriginY) * ds.Width;
@@ -402,15 +425,25 @@ export class ShpRenderer {
       for (let x = 0; x < img.Width; x++) {
         const lx = offset.X - ds.OriginX + x;
         const ly = offset.Y - ds.OriginY + y;
+        const art = imgData[rIdx] !== 0;
         if (
           0 <= lx && lx < ds.Width && 0 <= ly && ly < ds.Height &&
-          imgData[rIdx] !== 0 &&
+          art &&
           zBufVal > zBuffer[zIdx]
         ) {
           data[w] = Math.trunc(data[w] / 2);
           data[w + 1] = Math.trunc(data[w + 1] / 2);
           data[w + 2] = Math.trunc(data[w + 2] / 2);
           if (!unitLike && !isAnim) zBuffer[zIdx] = zBufVal;
+          // Only pixels the game actually darkened become the layer's shadow; capturing the
+          // whole sprite would paint shadow where the z-test rejected it (bridges, cliffs).
+          if (shadowPart != null) {
+            const pi = (y * img.Width + x) * 4;
+            shadowPart.data[pi] = 0;
+            shadowPart.data[pi + 1] = 0;
+            shadowPart.data[pi + 2] = 0;
+            shadowPart.data[pi + 3] = 128;
+          }
         }
         // Up to the next pixel
         rIdx++;
@@ -461,6 +494,8 @@ export class ShpRenderer {
           data[w + 1] = Math.trunc(data[w + 1] / 2);
           data[w + 2] = Math.trunc(data[w + 2] / 2);
           zBuffer[zIdx] = zBufVal;
+          // A cliff piece's shadow belongs to the ground, not to an object layer.
+          ds.markCategory(zIdx);
         }
         rIdx++;
         zIdx++;

@@ -330,6 +330,8 @@ function buildArgs(p) {
 
   const fmt = p.format === 'psd' ? 'psd' : (p.format === 'jpg' ? 'jpg' : 'png');
   args.push(fmt === 'jpg' ? '--output-jpg' : (fmt === 'psd' ? '--output-psd' : '--output-png'));
+  // PSD cannot be shown in a browser; the CLI writes a flattened PNG next to it.
+  if (fmt === 'psd') args.push('--psd-preview');
   const pngLevel = clampInt(p.pngCompression, 1, 9, 4);
   const jpegQuality = clampInt(p.jpegQuality, 1, 100, 92);
   if (fmt === 'png') args.push('--png-compression=' + pngLevel);
@@ -586,18 +588,34 @@ function streamRender(req, res, params) {
             }
           } catch { /* metadata is optional */ }
           cachePut(job.token, { buffer, name: job.name, mime: job.mime, at: Date.now() });
+          let previewUrl = null;
+          if (job.fmt === 'psd') {
+            const previewFile = job.outFile.replace(/\.psd$/i, '') + '.preview.png';
+            try {
+              if (fs.existsSync(previewFile)) {
+                const previewBuffer = await fs.promises.readFile(previewFile);
+                const previewToken = job.token + 'p';
+                const previewName = job.name.replace(/\.psd$/i, '') + '.png';
+                cachePut(previewToken, { buffer: previewBuffer, name: previewName, mime: 'image/png', at: Date.now() });
+                previewUrl = '/image/' + previewToken;
+              }
+            } catch { /* the preview is optional; the PSD download still works */ }
+          }
           cleanupJobDir(record);
-          finishRenderJob(record, { type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name, meta });
+          finishRenderJob(record, {
+            type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name,
+            previewUrl: previewUrl || undefined, meta,
+          });
         } catch (e) {
           cleanupJobDir(record);
           finishRenderJob(record, { type: 'error', message: String(e && e.message || e) });
         }
       } else {
         cleanupJobDir(record);
-        const message = record.timedOut
-          ? `Render timed out after ${RENDER_TIMEOUT_MS / 1000} seconds`
-          : 'Render exited with code ' + code;
-        finishRenderJob(record, { type: 'done', ok: false, code, message });
+        finishRenderJob(record, {
+          type: 'done', ok: false, code, timedOut: Boolean(record.timedOut),
+          message: record.timedOut ? `Render timed out after ${RENDER_TIMEOUT_MS / 1000} seconds` : '',
+        });
       }
     }
   }

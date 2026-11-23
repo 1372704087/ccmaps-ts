@@ -269,6 +269,22 @@ export class RenderEngine {
     if (settings.SavePSD && settings.OutputSink == null) {
       PsdExporter.save(outPath, surface, saveRect);
       logger.info(`Saved layered PSD ${outPath}`);
+      if (settings.PsdPreview) {
+        // Browsers cannot decode PSD, so the web UI previews this flattened PNG instead.
+        const previewPath = outPath.replace(/\.psd$/i, '') + '.preview.png';
+        const maxWidth = RenderEngine.PsdPreviewMaxWidth;
+        const requestedWidth = settings.PreviewWidth > 0 ? settings.PreviewWidth : maxWidth;
+        const targetWidth = Math.min(saveRect.Width, requestedWidth, maxWidth);
+        if (saveRect.Width > targetWidth) {
+          const targetHeight = Math.max(1, Math.round((saveRect.Height * targetWidth) / saveRect.Width));
+          const previewSurface = resizeRegionBox(surface, saveRect, targetWidth, targetHeight);
+          previewSurface.savePNG(previewPath, settings.PNGQuality, 0, 0, targetWidth, targetHeight);
+          logger.info(`Saved PSD preview ${targetWidth}x${targetHeight} to ${previewPath}`);
+        } else {
+          surface.savePNG(previewPath, settings.PNGQuality, saveRect.Left, saveRect.Top, saveRect.Width, saveRect.Height);
+          logger.info(`Saved PSD preview to ${previewPath}`);
+        }
+      }
     } else if (settings.OutputSink != null) {
       settings.OutputSink(outputSurface, outputRect);
     } else {
@@ -332,6 +348,9 @@ export class RenderEngine {
 
   /// <summary>Above this many pixels (full canvas) a preview is drawn strip by strip.</summary>
   static DefaultBandThreshold = 120_000_000;
+
+  /// <summary>Longest edge of the flattened PNG written next to a layered PSD.</summary>
+  static PsdPreviewMaxWidth = 2048;
 
   /// <summary>Draws the map in horizontal strips and downscales each strip straight into the
   /// preview image, so the peak canvas is one strip instead of the whole map.</summary>
