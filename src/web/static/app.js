@@ -41,7 +41,7 @@
     lightbox: $('lightbox'), lightboxImg: $('lightboxImg'), lightboxTitle: $('lightboxTitle'),
     lightboxClose: $('lightboxClose'), lightboxDownload: $('lightboxDownload'),
     lightboxBody: $('lightboxBody'), zoomPct: $('zoomPct'),
-    engineTag: $('engineTag'), langBtn: $('langBtn'), langText: $('langText'),
+    engineTag: $('engineTag'), langBtn: $('langBtn'), langText: $('langText'), langMenu: $('langMenu'),
     statusDot: $('statusDot'), statusText: $('statusText'),
     infoMaps: $('infoMaps'), infoRender: $('infoRender'),
   };
@@ -77,7 +77,8 @@
   let renderStart = 0;
   let lastStartEngine = 'auto';
   let blobUrl = null;
-  let infoRenderEmpty = true;
+  // Rebuilds the "last render" text after a language switch.
+  let infoRenderText = null;
   let br = null;
   let brAssetsSig = '';
 
@@ -89,373 +90,28 @@
 
   // ---- i18n ----
   const LANG_KEY = 'cncmaps_lang';
-  const I18N = {
-    zh: {
-      'title': 'CNCMaps TS · 地图渲染器',
-      'langBtn': 'English',
-      'themeToggle': '切换主题',
-      'themeDark': '深色',
-      'themeLight': '浅色',
-      'themeTerminal': '军规终端',
-      'themeHolo': '全息冷蓝',
-      'themePaper': '纸感工作台',
-      'themeContrast': '高对比',
-      'themeCyber': '赛博紫',
-      'themeSoviet': '铁幕红',
-      'themeFrost': '冰霜白',
-      'themeSunset': '落日橙',
-      'themeStarry': '星空',
-      'themeGroupDark': '深色系',
-      'themeGroupLight': '浅色系',
-      'themeGroupSpecial': '无障碍',
-      'tagline': 'Red Alert 2 / Yuri\'s Revenge · 地图渲染器',
-      'srcTitle': '地图来源',
-      'modeLabel': '渲染位置',
-      'modeBrowser': '浏览器（不上传）',
-      'modeServer': '服务器',
-      'modeHintBrowser': '地图与游戏资源只在本机浏览器读取，不上传服务器',
-      'modeHintServer': '地图会上传到服务器，使用服务器配置的游戏资源渲染',
-      'srcLabelBrowser': '选择本地地图（不上传）',
-      'srcLabelServer': '选择地图（上传本机地图文件）',
-      'uploadBtnBrowser': '选择本地地图（可多选）',
-      'uploadBtnServer': '上传地图文件（可多选）',
-      'resLabelBrowser': '游戏资源（选择本机游戏目录，不上传）',
-      'assetStateEmptyBrowser': '未选择游戏目录，浏览器渲染需要游戏资源',
-      'assetLocalReady': '本地资源 {n} 个 · {size}（不上传）',
-      'workerStarting': '启动浏览器渲染器…',
-      'phaseAssets': '读取游戏资源…',
-      'browserNoMapFile': '该地图没有本地文件，请切换到服务器模式',
-      'browserNoAssets': '请先选择游戏目录（浏览器渲染需要游戏资源）',
-      'browserUnsupported': '当前浏览器不支持本地渲染，已切换到服务器模式',
-      'browserSurfaceTooLarge': '地图过大，浏览器内存不足，请切换到服务器模式',
-      'browserEncodeUnsupported': '浏览器不支持图片编码，请切换到服务器模式',
-      'browserAssetsMissing': '无法加载游戏资源，请确认选择的是完整游戏目录，或切换到服务器模式',
-      'browserRenderFailed': '浏览器渲染失败',
-      'localMapsAdded': '已选择 {n} 个本地地图（不上传）',
-      'srcLabel': '选择地图（上传本机地图文件）',
-      'uploadBtn': '上传地图文件（可多选）',
-      'resLabel': '游戏资源（可选，远程部署时上传本机游戏目录）',
-      'gameDirBtn': '选择游戏目录',
-      'assetNoFiles': '所选目录中没有可用的游戏资源文件',
-      'curLabel': '当前选择',
-      'maplistEmpty': '请上传 .map / .yrm / .mpr 地图文件（支持多选）',
-      'clearMaps': '清空',
-      'removeMap': '移除',
-      'mapsCleared': '已清空地图列表',
-      'mapRemoved': '已移除地图',
-      'mapReorder': '地图顺序已调整',
-      'streamEnded': '渲染连接提前断开，请重试',
-      'zipFailed': 'ZIP 创建失败，请重试',
-      'paramsTitle': '渲染参数',
-      'lblFormat': '输出格式',
-      'fmtPsd': 'PSD（分层）',
-      'psdHint': 'PSD 分层导出仅支持服务器模式，按地形、建筑、步兵、载具、飞行器、海军、地形对象、覆盖物、污染物建立图层组；地形组内为整图合并层，其余组内按对象拆分独立图层，名称优先取 CSF 本地化名并带格坐标（如 发电厂 (22,20)、灰熊坦克 (24,21)），无条目时回退 ID；覆盖物与污染物按类型合并',
-      'psdServerOnly': 'PSD 分层导出仅支持服务器模式，请切换到服务器或使用 PNG/JPEG',
-      'psdReady': 'PSD 已生成，点击下方按钮下载',
-      'lblEngine': '引擎',
-      'engineAuto': '自动检测',
-      'engineYR': '尤里的复仇 (YR)',
-      'engineRA2': '红色警戒 2 (RA2)',
-      'engineTS': '泰伯利亚之日 (TS)',
-      'engineFS': '火风暴 (FS)',
-      'lblSizeMode': '尺寸模式',
-      'sizeAuto': '自动',
-      'sizeLocal': '局部 (LocalSize)',
-      'sizeFull': '全图 (FullMap)',
-      'lblPngComp': 'PNG 压缩',
-      'lblJpegQuality': 'JPEG 质量',
-      'lblPreviewWidth': '预览宽度',
-      'previewOriginal': '原始尺寸',
-      'lblAspect': '画幅', 'aspectFree': '原始比例',
-      'lblCrop': '区域裁剪', 'cropEnable': '启用', 'cropWidth': '宽 %', 'cropHeight': '高 %',
-      'cropHint': '裁剪区域相对当前尺寸的百分比',
-      'advancedTitle': '高级渲染',
-      'lblMarkerShape': '出生点形状', 'markerSquared': '方块', 'markerCircled': '圆形', 'markerDiamond': '菱形', 'markerEllipsed': '椭圆', 'markerStar': '星形', 'markerTiled': '平铺',
-      'lblMarkerSize': '标记大小', 'tglTunnels': '隧道路径', 'tglTunnelPos': '隧道位置偏移',
-      'tglIce': '冰面增长', 'tglCompressTiles': '压缩瓦片', 'tglFixOverlays': '修复覆盖物', 'tglFixTiles': '修复瓦片',
-      'tglNoExpandMixes': '不展开 MIX', 'tglIgnoreLighting': '忽略光照',
-      'lblZipTemplate': 'ZIP 文件名模板', 'zipTemplateHint': '变量：{map} {engine} {width} {height} {index} {ext}，重名会自动加序号', 'batchResume': '继续未完成', 'bqResultMissing': '结果未缓存，请重试',
-      'batchQueueTitle': '批量队列', 'batchRetryFailed': '重试失败', 'batchClear': '关闭', 'batchSkippedSuffix': ' · 跳过 {n} 张', 'batchRestored': '已恢复上次批量队列',
-      'bqPending': '待渲染', 'bqRendering': '渲染中', 'bqDone': '完成', 'bqFailed': '失败', 'bqSkipped': '跳过',
-      'bqSkip': '跳过', 'bqResume': '恢复', 'bqSkipCurrent': '跳过本张',
-      'presetCustom': '自定义参数',
-      'presetSave': '保存预设',
-      'presetDelete': '删除',
-      'presetNamePrompt': '预设名称：',
-      'presetSaved': '预设已保存',
-      'presetDeleted': '预设已删除',
-      'presetDeleteConfirm': '删除这个预设？',
-      'serverOk': '服务器就绪：游戏目录 {dirs} 个 · 并发 {active}/{max}',
-      'serverQueued': '排队 {n}',
-      'serverNoDirs': '服务器未配置游戏资源（浏览器模式可用）',
-      'serverDirInvalid': '服务器游戏目录无效或缺少 .mix 文件',
-      'tglStartPos': '标记出生点',
-      'tglOre': '高亮矿石',
-      'renderBtn': '开始渲染',
-      'renderAllBtn': '全部渲染',
-      'downloadZip': '下载 ZIP',
-      'batchRendering': '批量渲染 {i}/{total}：{name}',
-      'batchDone': '批量渲染完成：成功 {ok} 张',
-      'batchDoneFail': '批量渲染完成：成功 {ok} 张，失败 {fail} 张',
-      'batchTooMany': '一次最多批量渲染 {n} 张地图',
-      'zipEmpty': '没有可打包的渲染结果',
-      'mapInfoTitle': '地图信息',
-      'infoName': '名称', 'infoAuthor': '作者', 'infoSize': '尺寸',
-      'infoPlayers': '玩家数', 'infoTheater': '剧场',
-      'analysisTitle': '渲染统计',
-      'analysisTerrain': '地形', 'analysisResources': '资源', 'analysisObjects': '物件',
-      'analysisWater': '水面', 'analysisShore': '海岸', 'analysisCliff': '悬崖', 'analysisRamp': '斜坡', 'analysisElevation': '海拔',
-      'analysisOre': '矿石', 'analysisGems': '宝石', 'analysisCredits': '信用点', 'analysisSpawners': '矿点',
-      'analysisStructures': '建筑', 'analysisTech': '科技建筑', 'analysisUnits': '单位', 'analysisInfantry': '步兵', 'analysisAircraft': '飞机', 'analysisBridges': '桥梁',
-      'infoLoading': '读取地图信息…', 'infoNone': '—',
-      'dropHint': '可直接把地图文件拖到此面板',
-      'readingGameDir': '读取游戏目录…',
-      'gameDirPermission': '没有游戏目录读取权限',
-      'gameDirRestoreFail': '无法恢复上次的游戏目录，请重新选择',
-      'mapFirst': '请先选择地图',
-      'downloadOriginal': '下载原图',
-      'phaseWait': '等待开始',
-      'prevTitle': '预览',
-      'previewPlaceholder': '渲染完成后自动显示地图预览',
-      'previewAlt': '地图预览',
-      'downloadImg': '下载图片',
-      'previewTip': '点击预览图可放大查看',
-      'statusReady': '就绪',
-      'creditHint': '（可点击跳转 GitHub）',
-      'infoRenderEmpty': '最近: 尚未渲染',
-      'lightboxTitle': '图片预览',
-      'closeLabel': '关闭',
-      'zoomIn': '放大', 'zoomOut': '缩小', 'zoomFit': '适应窗口', 'zoom100': '实际大小',
-      'enginePrefix': '引擎 · ',
-      'selMap': '已选择地图',
-      'extErr': '仅支持 .map / .yrm / .mpr 文件',
-      'uploading': '上传中…',
-      'uploadFail': '上传失败',
-      'uploadBatchDone': '已上传 {ok}/{total} 个地图',
-      'uploadBatchPartial': '已上传 {ok}/{total} 个地图，{bad} 个文件被跳过',
-      'mapsPrefix': '地图：',
-      'browserBadge': '本地',
-      'phaseParsing': '解析地图 / 规则…', 'phaseTiles': '绘制地形…',
-      'phaseObjects': '绘制建筑与单位…', 'phaseEncoding': '编码输出…',
-      'phaseDrawing': '绘制中…',
-      'phaseSubmit': '提交任务…',
-      'rendering': '渲染中…',
-      'complete': '完成',
-      'failCode': '失败 (code ',
-      'renderFailed': '渲染失败',
-      'renderFailCode': '渲染失败（退出码 {code}）',
-      'renderTimeout': '渲染超时，已终止进程',
-      'renderError': '渲染错误',
-      'renderDone': '渲染完成',
-      'errorPrefix': '错误：',
-      'reqFailed': '请求失败',
-      'reqFailedPrefix': '请求失败：',
-      'recentPrefix': '最近: ',
-      'historyTitle': '渲染结果',
-      'historyClear': '清空',
-      'historyClearConfirm': '清空全部渲染历史？',
-      'historyCleared': '渲染历史已清空',
-      'historyReuse': '复用参数',
-      'historyReuseTitle': '套用该次渲染参数并重新渲染',
-      'removeHistory': '删除',
-      'historyNoMap': '已套用参数，但地图列表中找不到对应地图',
-      'historyNoParams': '该历史记录没有保存的渲染参数',
-      'logTitle': '渲染日志',
-      'logClear': '清空',
-      'versionTitle': '当前版本',
-      'cancelBtn': '取消',
-      'cancelling': '正在取消…',
-      'cancelled': '已取消',
-      'queuedPos': '排队中（第 {pos} 位）',
-      'batchCancelled': '批量渲染已取消',
-    },
-    en: {
-      'title': 'CNCMaps TS · Map Renderer',
-      'langBtn': '中文',
-      'themeToggle': 'Change theme',
-      'themeDark': 'Dark',
-      'themeLight': 'Light',
-      'themeTerminal': 'Field Terminal',
-      'themeHolo': 'Holo Blue',
-      'themePaper': 'Paper Desk',
-      'themeContrast': 'High Contrast',
-      'themeCyber': 'Cyber Violet',
-      'themeSoviet': 'Iron Curtain',
-      'themeFrost': 'Frost Light',
-      'themeSunset': 'Sunset Ember',
-      'themeStarry': 'Starry Night',
-      'themeGroupDark': 'Dark',
-      'themeGroupLight': 'Light',
-      'themeGroupSpecial': 'Accessibility',
-      'tagline': 'Red Alert 2 / Yuri\'s Revenge · Map Renderer',
-      'srcTitle': 'Map Source',
-      'modeLabel': 'Render Location',
-      'modeBrowser': 'Browser (no upload)',
-      'modeServer': 'Server',
-      'modeHintBrowser': 'Maps and game files stay in this browser; nothing is uploaded',
-      'modeHintServer': 'Maps are uploaded and rendered with the server game resources',
-      'srcLabelBrowser': 'Choose local maps (no upload)',
-      'srcLabelServer': 'Choose maps (upload from this device)',
-      'uploadBtnBrowser': 'Choose Local Maps (multi)',
-      'uploadBtnServer': 'Upload Map Files (multi)',
-      'resLabelBrowser': 'Game resources (select a local game folder, no upload)',
-      'assetStateEmptyBrowser': 'No game folder selected; browser rendering needs game resources',
-      'assetLocalReady': 'Local assets: {n} files · {size} (not uploaded)',
-      'workerStarting': 'Starting browser renderer…',
-      'phaseAssets': 'Reading game resources…',
-      'browserNoMapFile': 'This map has no local file; switch to server mode',
-      'browserNoAssets': 'Select a game folder first (browser rendering needs game resources)',
-      'browserUnsupported': 'This browser cannot render locally; switched to server mode',
-      'browserSurfaceTooLarge': 'Map too large for browser memory; switch to server mode',
-      'browserEncodeUnsupported': 'Image encoding is not supported; switch to server mode',
-      'browserAssetsMissing': 'Could not load game resources; select a complete game folder or switch to server mode',
-      'browserRenderFailed': 'Browser render failed',
-      'localMapsAdded': 'Selected {n} local maps (not uploaded)',
-      'srcLabel': 'Choose a map (upload a local file)',
-      'uploadBtn': 'Upload Map Files (multi)',
-      'resLabel': 'Game resources (optional; upload a local game folder for remote servers)',
-      'gameDirBtn': 'Select Game Folder',
-      'assetNoFiles': 'No usable game asset files found in the selected folder',
-      'curLabel': 'Current Selection',
-      'maplistEmpty': 'Upload .map / .yrm / .mpr map files (multiple allowed)',
-      'clearMaps': 'Clear',
-      'removeMap': 'Remove',
-      'mapsCleared': 'Map list cleared',
-      'mapRemoved': 'Map removed',
-      'mapReorder': 'Map order updated',
-      'streamEnded': 'Render connection ended early; please retry',
-      'zipFailed': 'ZIP creation failed; please retry',
-      'paramsTitle': 'Render Options',
-      'lblFormat': 'Output Format',
-      'fmtPsd': 'PSD (layers)',
-      'psdHint': 'Layered PSD export is server-only: terrain, buildings, infantry, vehicles, aircraft, naval, terrain objects, overlays and smudges become layer groups. Terrain holds one merged map layer; the other groups split every object into its own layer, named with the game CSF name plus cell (e.g. Grizzly Tank (24,21)) and falling back to the internal ID; overlays and smudges merge by type',
-      'psdServerOnly': 'Layered PSD export is server-only; switch to server mode or use PNG/JPEG',
-      'psdReady': 'PSD ready — use the download button below',
-      'lblEngine': 'Engine',
-      'engineAuto': 'Auto Detect',
-      'engineYR': 'Yuri\'s Revenge (YR)',
-      'engineRA2': 'Red Alert 2 (RA2)',
-      'engineTS': 'Tiberian Sun (TS)',
-      'engineFS': 'Firestorm (FS)',
-      'lblSizeMode': 'Size Mode',
-      'sizeAuto': 'Auto',
-      'sizeLocal': 'Local (LocalSize)',
-      'sizeFull': 'Full Map',
-      'lblPngComp': 'PNG Compression',
-      'lblJpegQuality': 'JPEG Quality',
-      'lblPreviewWidth': 'Preview Width',
-      'previewOriginal': 'Original Size',
-      'lblAspect': 'Aspect', 'aspectFree': 'Original ratio',
-      'lblCrop': 'Crop', 'cropEnable': 'Enabled', 'cropWidth': 'W %', 'cropHeight': 'H %',
-      'cropHint': 'Crop values are percentages of the current size rect',
-      'advancedTitle': 'Advanced Render',
-      'lblMarkerShape': 'Start marker', 'markerSquared': 'Squared', 'markerCircled': 'Circled', 'markerDiamond': 'Diamond', 'markerEllipsed': 'Ellipsed', 'markerStar': 'Star', 'markerTiled': 'Tiled',
-      'lblMarkerSize': 'Marker size', 'tglTunnels': 'Tunnel paths', 'tglTunnelPos': 'Tunnel offset',
-      'tglIce': 'Ice growth', 'tglCompressTiles': 'Compress tiles', 'tglFixOverlays': 'Fix overlays', 'tglFixTiles': 'Fix tiles',
-      'tglNoExpandMixes': 'Skip expand MIX', 'tglIgnoreLighting': 'Ignore lighting',
-      'lblZipTemplate': 'ZIP filename template', 'zipTemplateHint': 'Variables: {map} {engine} {width} {height} {index} {ext}; duplicate names get a suffix', 'batchResume': 'Resume unfinished', 'bqResultMissing': 'Result not cached; retry it',
-      'batchQueueTitle': 'Batch Queue', 'batchRetryFailed': 'Retry failed', 'batchClear': 'Close', 'batchSkippedSuffix': ' · {n} skipped', 'batchRestored': 'Previous batch queue restored',
-      'bqPending': 'Pending', 'bqRendering': 'Rendering', 'bqDone': 'Done', 'bqFailed': 'Failed', 'bqSkipped': 'Skipped',
-      'bqSkip': 'Skip', 'bqResume': 'Restore', 'bqSkipCurrent': 'Skip this',
-      'presetCustom': 'Custom',
-      'presetSave': 'Save Preset',
-      'presetDelete': 'Delete',
-      'presetNamePrompt': 'Preset name:',
-      'presetSaved': 'Preset saved',
-      'presetDeleted': 'Preset deleted',
-      'presetDeleteConfirm': 'Delete this preset?',
-      'serverOk': 'Server ready: {dirs} game dir(s) · concurrency {active}/{max}',
-      'serverQueued': '{n} queued',
-      'serverNoDirs': 'Server has no game resources (browser mode still works)',
-      'serverDirInvalid': 'Server game directories are invalid or contain no .mix files',
-      'tglStartPos': 'Mark Start Positions',
-      'tglOre': 'Highlight Ore',
-      'renderBtn': 'Start Render',
-      'renderAllBtn': 'Render All',
-      'downloadZip': 'Download ZIP',
-      'batchRendering': 'Rendering {i}/{total}: {name}',
-      'batchDone': 'Batch complete: {ok} succeeded',
-      'batchDoneFail': 'Batch complete: {ok} succeeded, {fail} failed',
-      'batchTooMany': 'At most {n} maps can be rendered in one batch',
-      'zipEmpty': 'No rendered images to package',
-      'mapInfoTitle': 'Map Info',
-      'infoName': 'Name', 'infoAuthor': 'Author', 'infoSize': 'Size',
-      'infoPlayers': 'Players', 'infoTheater': 'Theater',
-      'analysisTitle': 'Render Stats',
-      'analysisTerrain': 'Terrain', 'analysisResources': 'Resources', 'analysisObjects': 'Objects',
-      'analysisWater': 'Water', 'analysisShore': 'Shore', 'analysisCliff': 'Cliff', 'analysisRamp': 'Ramp', 'analysisElevation': 'Elevation',
-      'analysisOre': 'Ore', 'analysisGems': 'Gems', 'analysisCredits': 'Credits', 'analysisSpawners': 'Ore spawners',
-      'analysisStructures': 'Structures', 'analysisTech': 'Tech', 'analysisUnits': 'Units', 'analysisInfantry': 'Infantry', 'analysisAircraft': 'Aircraft', 'analysisBridges': 'Bridges',
-      'infoLoading': 'Reading map info…', 'infoNone': '—',
-      'dropHint': 'Drag map files onto this panel',
-      'readingGameDir': 'Reading game folder…',
-      'gameDirPermission': 'No permission to read the game folder',
-      'gameDirRestoreFail': 'Could not restore the previous game folder; select it again',
-      'mapFirst': 'Select a map first',
-      'downloadOriginal': 'Download original',
-      'phaseWait': 'Waiting to start',
-      'prevTitle': 'Preview',
-      'previewPlaceholder': 'Map preview will appear after rendering',
-      'previewAlt': 'map preview',
-      'downloadImg': 'Download Image',
-      'previewTip': 'Click the preview to zoom in',
-      'statusReady': 'Ready',
-      'creditHint': '(click to open GitHub)',
-      'infoRenderEmpty': 'Recent: not rendered',
-      'lightboxTitle': 'Image Preview',
-      'closeLabel': 'Close',
-      'zoomIn': 'Zoom In', 'zoomOut': 'Zoom Out', 'zoomFit': 'Fit Window', 'zoom100': '100%',
-      'enginePrefix': 'Engine · ',
-      'selMap': 'Map selected',
-      'extErr': 'Only .map / .yrm / .mpr files are supported',
-      'uploading': 'Uploading…',
-      'uploadFail': 'Upload failed',
-      'uploadDone': 'Upload complete, map selected',
-      'uploadBatchDone': 'Uploaded {ok}/{total} maps',
-      'uploadBatchPartial': 'Uploaded {ok}/{total} maps, {bad} file(s) skipped',
-      'mapsPrefix': 'Maps: ',
-      'browserBadge': 'Local',
-      'phaseParsing': 'Parsing map / rules…', 'phaseTiles': 'Drawing terrain…',
-      'phaseObjects': 'Drawing buildings & units…', 'phaseEncoding': 'Encoding output…',
-      'phaseDrawing': 'Drawing…',
-      'phaseSubmit': 'Submitting…',
-      'rendering': 'Rendering…',
-      'complete': 'Done',
-      'failCode': 'Failed (code ',
-      'renderFailed': 'Render failed',
-      'renderFailCode': 'Render failed (exit code {code})',
-      'renderTimeout': 'Render timed out and was terminated',
-      'renderError': 'Render error',
-      'renderDone': 'Render complete',
-      'errorPrefix': 'Error: ',
-      'reqFailed': 'Request failed',
-      'reqFailedPrefix': 'Request failed: ',
-      'recentPrefix': 'Recent: ',
-      'historyTitle': 'Rendered Images',
-      'historyClear': 'Clear',
-      'historyClearConfirm': 'Clear all render history?',
-      'historyCleared': 'Render history cleared',
-      'historyReuse': 'Reuse settings',
-      'historyReuseTitle': 'Apply these settings and render again',
-      'removeHistory': 'Delete',
-      'historyNoMap': 'Settings applied, but no matching map is in the list',
-      'historyNoParams': 'This history entry has no saved settings',
-      'logTitle': 'Render log',
-      'logClear': 'Clear',
-      'versionTitle': 'Version',
-      'cancelBtn': 'Cancel',
-      'cancelling': 'Cancelling…',
-      'cancelled': 'Cancelled',
-      'queuedPos': 'Queued (position {pos})',
-      'batchCancelled': 'Batch render cancelled',
-    },
+  const I18N = window.CNCMAPS_I18N || {};
+  const LANGS = [
+    { id: 'zh', label: '中文', htmlLang: 'zh-CN' },
+    { id: 'en', label: 'English', htmlLang: 'en' },
+    { id: 'de', label: 'Deutsch', htmlLang: 'de' },
+    { id: 'fr', label: 'Français', htmlLang: 'fr' },
+    { id: 'ja', label: '日本語', htmlLang: 'ja' },
+  ];
+  let LANG = localStorage.getItem(LANG_KEY);
+  if (!I18N[LANG]) LANG = 'zh';
+  const t = (key) => {
+    const pack = I18N[LANG] || {};
+    if (pack[key] !== undefined) return pack[key];
+    if (I18N.en && I18N.en[key] !== undefined) return I18N.en[key];
+    if (I18N.zh && I18N.zh[key] !== undefined) return I18N.zh[key];
+    return key;
   };
-  let LANG = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh';
-  const t = (key) => (I18N[LANG] && I18N[LANG][key] !== undefined ? I18N[LANG][key] : (I18N.zh[key] || key));
   const tf = (key, vars) => t(key).replace(/\{(\w+)\}/g, (s, k) => (vars[k] !== undefined ? vars[k] : s));
 
   function applyLang() {
-    document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
+    const langMeta = LANGS.find((item) => item.id === LANG) || LANGS[0];
+    document.documentElement.lang = langMeta.htmlLang;
     document.title = t('title');
     document.querySelectorAll('[data-i18n]').forEach((el) => {
       el.textContent = t(el.getAttribute('data-i18n'));
@@ -474,12 +130,18 @@
       cr.innerHTML = '<a href="https://github.com/zzattack/ccmaps-net" target="_blank" rel="noopener noreferrer">CNCMaps - NET</a>'
         + t('creditHint') + ' | CNCMaps TS · by 1372704087';
     }
-    els.langText.textContent = t('langBtn');
+    els.langText.textContent = langMeta.label;
+    renderLangMenu();
     renderThemeMenu();
     updateThemeButton();
     els.appVersion.title = t('versionTitle') + ' ' + APP_VERSION;
     setEngineTag();
-    if (infoRenderEmpty) els.infoRender.textContent = t('infoRenderEmpty');
+    refreshInfoRender();
+    refreshStatusText();
+    refreshProgressPhase();
+    els.infoMaps.textContent = t('mapsPrefix') + maps.length;
+    refreshMapListLabels();
+    refreshServerHealthText();
     if (assetInfo)
       els.assetState.textContent = tf('assetLocalReady', assetInfo);
     if (currentInfoEntry) renderMapInfo(currentInfoEntry, currentMapInfo);
@@ -490,11 +152,70 @@
   }
 
   function setLang(lang) {
+    if (!I18N[lang]) return;
     LANG = lang;
     localStorage.setItem(LANG_KEY, lang);
     applyLang();
   }
-  els.langBtn.onclick = () => setLang(LANG === 'zh' ? 'en' : 'zh');
+  function renderLangMenu() {
+    if (!els.langMenu) return;
+    els.langMenu.textContent = '';
+    LANGS.forEach((lang) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'lang-item';
+      btn.dataset.lang = lang.id;
+      btn.setAttribute('role', 'menuitemradio');
+      btn.setAttribute('aria-checked', lang.id === LANG ? 'true' : 'false');
+      const name = document.createElement('span');
+      name.className = 'lang-name';
+      name.textContent = lang.label;
+      const check = document.createElement('span');
+      check.className = 'lang-check';
+      check.setAttribute('aria-hidden', 'true');
+      check.textContent = '✓';
+      btn.append(name, check);
+      els.langMenu.append(btn);
+    });
+    els.langMenu.setAttribute('aria-label', t('languageLabel'));
+  }
+  function setLangMenuOpen(open) {
+    els.langMenu.hidden = !open;
+    els.langBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      const active = els.langMenu.querySelector('.lang-item[aria-checked="true"]');
+      if (active) active.focus();
+    }
+  }
+  els.langBtn.onclick = (event) => {
+    event.stopPropagation();
+    setLangMenuOpen(els.langMenu.hidden);
+  };
+  els.langMenu.addEventListener('click', (event) => {
+    const item = event.target.closest('.lang-item');
+    if (!item) return;
+    setLangMenuOpen(false);
+    els.langBtn.focus();
+    setLang(item.dataset.lang);
+  });
+  els.langMenu.addEventListener('keydown', (event) => {
+    const items = Array.from(els.langMenu.querySelectorAll('.lang-item'));
+    const index = items.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      items[(index + delta + items.length) % items.length].focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setLangMenuOpen(false);
+      els.langBtn.focus();
+    }
+  });
+  document.addEventListener('click', (event) => {
+    if (els.langMenu.hidden) return;
+    if (els.langMenu.contains(event.target) || els.langBtn.contains(event.target)) return;
+    setLangMenuOpen(false);
+  });
 
   const THEME_KEY = 'cncmaps_theme';
   const THEME_GROUPS = {
@@ -668,6 +389,28 @@
   function setStatus(state, text) {
     els.statusDot.className = 'dot' + (state ? ' ' + state : '');
     els.statusText.textContent = text;
+  }
+
+  // Status messages are transient, so after a language switch we rebuild the
+  // text from the current app state instead of keeping the previous language.
+  function refreshStatusText() {
+    if (batchBusy) {
+      if (batchCurrent && batchCurrent.status === 'rendering') {
+        setStatus('work', tf('batchRendering', {
+          i: batchCurrent.index + 1,
+          total: batchItems.length,
+          name: batchCurrent.entry ? batchCurrent.entry.name : '',
+        }));
+      } else {
+        setStatus('work', t('rendering'));
+      }
+      return;
+    }
+    if (renderBusy) {
+      setStatus('work', t('rendering'));
+      return;
+    }
+    setStatus('ok', selectedMap ? t('selMap') : t('statusReady'));
   }
 
   function toast(message, type, ms) {
@@ -938,30 +681,42 @@
     toast(t('presetDeleted'), 'ok');
   }
 
+  let serverHealthText = null;
+  function refreshServerHealthText() {
+    if (renderMode !== 'server' || !serverHealthText) return;
+    els.serverHealth.textContent = serverHealthText();
+  }
+
   async function refreshServerHealth() {
     try {
       const resp = await fetch('/api/health');
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const health = await resp.json();
       if (health.gameDirs === 0) {
-        els.serverHealth.textContent = t('serverNoDirs');
+        serverHealthText = () => t('serverNoDirs');
         els.serverHealth.classList.add('warn');
+        refreshServerHealthText();
         return;
       }
       if (health.gameDirsValid === 0) {
-        els.serverHealth.textContent = t('serverDirInvalid');
+        serverHealthText = () => t('serverDirInvalid');
         els.serverHealth.classList.add('warn');
+        refreshServerHealthText();
         return;
       }
-      let text = tf('serverOk', {
-        dirs: health.gameDirsValid,
-        active: health.activeRenderJobs,
-        max: health.maxRenderJobs,
-      });
-      if (health.queuedRenders > 0) text += ' · ' + tf('serverQueued', { n: health.queuedRenders });
-      els.serverHealth.textContent = text;
+      serverHealthText = () => {
+        let text = tf('serverOk', {
+          dirs: health.gameDirsValid,
+          active: health.activeRenderJobs,
+          max: health.maxRenderJobs,
+        });
+        if (health.queuedRenders > 0) text += ' · ' + tf('serverQueued', { n: health.queuedRenders });
+        return text;
+      };
+      refreshServerHealthText();
       els.serverHealth.classList.remove('warn');
     } catch (e) {
+      serverHealthText = null;
       els.serverHealth.textContent = '';
       els.serverHealth.classList.remove('warn');
     }
@@ -1056,6 +811,22 @@
     });
     if (selectedMap) selectMap(selectedMap);
     updateRenderButtons();
+  }
+
+  // The list is only rebuilt when maps change; refresh the translated bits
+  // (badge, remove tooltip) when the UI language changes.
+  function refreshMapListLabels() {
+    els.maplist.querySelectorAll('.maplist-item').forEach((item) => {
+      const entry = maps.find((m) => m.key === item.dataset.key);
+      if (!entry) return;
+      const size = item.querySelector('.sz');
+      if (size) size.textContent = entry.file && !entry.uploadToken ? t('browserBadge') : fmtSize(entry.size);
+      const remove = item.querySelector('.ml-remove');
+      if (remove) {
+        remove.title = t('removeMap');
+        remove.setAttribute('aria-label', t('removeMap'));
+      }
+    });
   }
 
   function resetMapSelection() {
@@ -1155,9 +926,10 @@
       els.mapAnalysisBody.innerHTML = '';
       return;
     }
+    const langMeta = LANGS.find((item) => item.id === LANG) || LANGS[1];
     const fmt = (v) => {
       const n = Number(v);
-      return Number.isFinite(n) ? n.toLocaleString(LANG === 'en' ? 'en-US' : 'zh-CN') : '0';
+      return Number.isFinite(n) ? n.toLocaleString(langMeta.htmlLang) : '0';
     };
     const terrain = stats.terrain;
     const resources = stats.resources;
@@ -1336,10 +1108,18 @@
 
   const ASSET_RE = /\.(mix|mmx|yro|ini|csf|pal|shp|tmp|vxl|hva|vpl|pkt)$/i;
 
-  function setProgress(pct, phase) {
+  // Progress phases are built from i18n keys when they happen, so keep the
+  // formula around to re-render it in the new language.
+  let progressPhaseFn = () => t('phaseWait');
+  function refreshProgressPhase() {
+    els.progressPhase.textContent = progressPhaseFn();
+  }
+
+  function setProgress(pct, phase, phaseFn) {
     pct = Math.max(0, Math.min(100, pct));
     els.progressFill.style.width = pct + '%';
     els.progressPct.textContent = Math.round(pct) + '%';
+    if (phaseFn) progressPhaseFn = phaseFn;
     els.progressPhase.textContent = phase || '';
     els.progressFill.classList.toggle('active', renderBusy && pct < 100);
     if (batchCurrent && batchCurrent.status === 'rendering') {
@@ -1389,6 +1169,10 @@
       els.logBody.appendChild(line);
     }
     if (atBottom) els.logBody.scrollTop = els.logBody.scrollHeight;
+  }
+
+  function refreshInfoRender() {
+    els.infoRender.textContent = infoRenderText ? infoRenderText() : t('infoRenderEmpty');
   }
 
   function openLog() {
@@ -1813,7 +1597,7 @@
     els.renderBtn.disabled = true;
     updateRenderButtons();
     renderStart = Date.now();
-    setProgress(0, t('phaseSubmit'));
+    setProgress(0, t('phaseSubmit'), () => t('phaseSubmit'));
     els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
@@ -1827,7 +1611,7 @@
           if (level >= 4) openLog();
         };
       }
-      setProgress(1, t('workerStarting'));
+      setProgress(1, t('workerStarting'), () => t('workerStarting'));
       const caps = await br.start();
       if (!caps.fileReaderSync || !caps.offscreen) {
         fallback = true;
@@ -1835,7 +1619,7 @@
       }
       const sig = gameFiles.map((a) => a.path + ':' + a.file.size + ':' + (a.file.lastModified || 0)).join('|');
       if (sig !== brAssetsSig) {
-        setProgress(2, t('phaseAssets'));
+        setProgress(2, t('phaseAssets'), () => t('phaseAssets'));
         await br.setAssets(gameFiles);
         brAssetsSig = sig;
       }
@@ -1865,10 +1649,10 @@
         noExpandMixes: els.noExpandMixes.checked,
         ignoreLighting: els.ignoreLighting.checked,
       }, (pct, phase) => {
-        setProgress(pct, phaseLabel(phase));
+        setProgress(pct, phaseLabel(phase), () => phaseLabel(phase));
       });
 
-      setProgress(100, t('complete'));
+      setProgress(100, t('complete'), () => t('complete'));
       blobUrl = URL.createObjectURL(res.blob);
       currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
       showPreview(blobUrl, res.name);
@@ -1881,8 +1665,8 @@
       const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
       const engKey = engineKeyFromName(res.engine);
       els.engineTag.textContent = t('enginePrefix') + t(engKey);
-      infoRenderEmpty = false;
-      els.infoRender.textContent = t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
+      infoRenderText = () => t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
+      refreshInfoRender();
       setStatus('ok', t('complete'));
       renderToast(t('renderDone') + ' · ' + res.name, 'ok');
       lastRenderResult = {
@@ -1952,7 +1736,7 @@
     els.renderBtn.disabled = true;
     updateRenderButtons();
     renderStart = Date.now();
-    setProgress(0, t('phaseSubmit'));
+    setProgress(0, t('phaseSubmit'), () => t('phaseSubmit'));
     els.previewFrame.classList.add('busy');
     setStatus('work', t('rendering'));
 
@@ -2018,13 +1802,13 @@
           if (evt.type === 'job') {
             currentJobId = evt.id;
           } else if (evt.type === 'queued') {
-            setProgress(0, tf('queuedPos', { pos: evt.position }));
+            setProgress(0, tf('queuedPos', { pos: evt.position }), () => tf('queuedPos', { pos: evt.position }));
           } else if (evt.type === 'start') {
             lastStartEngine = evt.engine || 'auto';
             els.engineTag.textContent = t('enginePrefix') + engineShort(lastStartEngine);
           } else if (evt.type === 'progress') {
             lastProgress = evt.percent;
-            setProgress(evt.percent, phaseLabel(evt.phase));
+            setProgress(evt.percent, phaseLabel(evt.phase), () => phaseLabel(evt.phase));
           } else if (evt.type === 'log') {
             appendLog(evt.message, evt.level === 'fatal' ? 'fatal' : 'warn');
             if (evt.level === 'fatal') {
@@ -2038,7 +1822,7 @@
               renderToast(t('cancelled'), 'warn');
               lastRenderResult = { ok: false, cancelled: true };
             } else if (evt.ok) {
-              setProgress(100, t('complete'));
+              setProgress(100, t('complete'), () => t('complete'));
               const isPsd = /\.psd$/i.test(evt.name || '');
               if (isPsd) {
                 currentImage = { url: evt.previewUrl || null, name: evt.name, downloadUrl: evt.downloadUrl };
@@ -2063,9 +1847,9 @@
               els.downloadBtn.dataset.name = evt.name;
               const ms = Date.now() - (renderStart || Date.now());
               const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
-              infoRenderEmpty = false;
-              els.infoRender.textContent = t('recentPrefix') + (evt.name || '') + ' · ' +
+              infoRenderText = () => t('recentPrefix') + (evt.name || '') + ' · ' +
                 engineShort(lastStartEngine) + ' · ' + dur;
+              refreshInfoRender();
               setStatus('ok', t('complete'));
               renderToast(t('renderDone') + ' · ' + evt.name, 'ok');
               const metaWidth = evt.meta && Number(evt.meta.renderedWidth);
@@ -2083,7 +1867,7 @@
                 ? t('renderTimeout')
                 : (evt.code != null ? tf('renderFailCode', { code: evt.code }) : (evt.message || t('renderFailed')));
               lastRenderResult = { ok: false, error: new Error(failText) };
-              setProgress(lastProgress, t('failCode') + evt.code + ')');
+              setProgress(lastProgress, t('failCode') + evt.code + ')', () => t('failCode') + evt.code + ')');
               appendLog(failText, 'error');
               openLog();
               renderToast(failText, 'error');

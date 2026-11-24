@@ -775,6 +775,25 @@ input[type=range]:active::-webkit-slider-thumb{cursor:grabbing;transform:scale(1
 .theme-check{opacity:0;color:var(--accent-text);font-size:12px}
 .theme-item[aria-checked="true"] .theme-check{opacity:1}
 
+/* ---------- language picker ---------- */
+.lang-wrap{position:relative}
+.lang-menu{
+  position:absolute;right:0;top:calc(100% + 10px);z-index:50;width:172px;padding:6px;
+  display:flex;flex-direction:column;gap:2px;border:1px solid var(--panel-border);border-radius:12px;
+  background:var(--toast-bg);box-shadow:var(--shadow);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  animation:menu-in .16s var(--ease) both;
+}
+.lang-item{
+  display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;border-radius:8px;
+  background:none;color:var(--text);font:inherit;font-size:12px;text-align:left;cursor:pointer;
+}
+.lang-item:hover{background:var(--row-hover)}
+.lang-item:focus-visible{background:var(--row-hover);outline:2px solid var(--accent);outline-offset:-2px}
+.lang-item[aria-checked="true"]{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent-text)}
+.lang-name{flex:1}
+.lang-check{opacity:0;color:var(--accent-text);font-size:12px}
+.lang-item[aria-checked="true"] .lang-check{opacity:1}
+
 /* ---------- light ---------- */
 [data-cncmaps-theme="light"]{
   color-scheme:light;
@@ -1269,6 +1288,8 @@ input[type=range]:active::-webkit-slider-thumb{cursor:grabbing;transform:scale(1
 }
 [data-cncmaps-theme="contrast"] .theme-item[aria-checked="true"]{background:var(--accent);color:var(--accent-contrast)}
 [data-cncmaps-theme="contrast"] .theme-item[aria-checked="true"] .theme-check{color:var(--accent-contrast)}
+[data-cncmaps-theme="contrast"] .lang-item[aria-checked="true"]{background:var(--accent);color:var(--accent-contrast)}
+[data-cncmaps-theme="contrast"] .lang-item[aria-checked="true"] .lang-check{color:var(--accent-contrast)}
 [data-cncmaps-theme="contrast"] .btn-primary{background:var(--accent);color:var(--accent-contrast);box-shadow:none}
 [data-cncmaps-theme="contrast"] .btn-primary:hover:not(:disabled){filter:none;background:#fff;color:#000}
 
