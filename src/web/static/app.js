@@ -880,6 +880,9 @@
     els.cropHeight.value = values.cropHeight ?? '100';
     els.markerShape.value = ['squared', 'circled', 'diamond', 'ellipsed', 'star', 'tiled'].includes(values.markerShape) ? values.markerShape : 'squared';
     els.markerSize.value = values.markerSize ?? '4';
+    syncRangeFill(els.pngCompression);
+    syncRangeFill(els.jpegQuality);
+    syncRangeFill(els.markerSize);
     els.tunnelPaths.checked = !!values.tunnelPaths;
     els.tunnelPosition.checked = !!values.tunnelPosition;
     els.iceGrowth.checked = !!values.iceGrowth;
@@ -1398,6 +1401,9 @@
     els.previewImg.onload = () => {
       els.placeholder.style.display = 'none';
       els.previewImg.style.display = 'block';
+      els.previewImg.classList.remove('swap-in');
+      void els.previewImg.offsetWidth;
+      els.previewImg.classList.add('swap-in');
     };
     els.previewImg.src = url.startsWith('blob:') ? url : url + '?t=' + Date.now();
     if (meta) els.previewMeta.textContent = meta;
@@ -1636,8 +1642,14 @@
   }
 
   let lastFocus = null;
+  let lightboxCloseTimer = 0;
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
   function openLightbox(url, name, downloadUrl) {
     if (els.lightbox.hidden) lastFocus = document.activeElement;
+    clearTimeout(lightboxCloseTimer);
+    els.lightbox.classList.remove('closing');
     els.lightboxImg.src = url;
     els.lightboxTitle.textContent = name || t('lightboxTitle');
     els.lightboxDownload.href = downloadUrl || (url.includes('/image/')
@@ -1645,6 +1657,11 @@
       : url);
     els.lightboxDownload.download = name || '';
     els.lightbox.hidden = false;
+    if (!els.lightbox.classList.contains('open')) {
+      els.lightbox.classList.remove('open');
+      void els.lightbox.offsetWidth;
+      els.lightbox.classList.add('open');
+    }
     zoom = 1;
     applyZoom();
     els.lightboxBody.scrollLeft = 0;
@@ -1652,12 +1669,26 @@
     try { els.lightboxClose.focus(); } catch (e) { /* ignore */ }
   }
   function closeLightbox() {
-    if (els.lightbox.hidden) return;
-    els.lightbox.hidden = true;
-    if (lastFocus && document.contains(lastFocus) && typeof lastFocus.focus === 'function') {
-      try { lastFocus.focus(); } catch (e) { /* ignore */ }
+    if (els.lightbox.hidden || els.lightbox.classList.contains('closing')) return;
+    els.lightbox.classList.remove('open');
+    const restoreFocus = () => {
+      if (lastFocus && document.contains(lastFocus) && typeof lastFocus.focus === 'function') {
+        try { lastFocus.focus(); } catch (e) { /* ignore */ }
+      }
+      lastFocus = null;
+    };
+    if (prefersReducedMotion()) {
+      els.lightbox.hidden = true;
+      restoreFocus();
+      return;
     }
-    lastFocus = null;
+    els.lightbox.classList.add('closing');
+    clearTimeout(lightboxCloseTimer);
+    lightboxCloseTimer = setTimeout(() => {
+      els.lightbox.classList.remove('closing');
+      els.lightbox.hidden = true;
+      restoreFocus();
+    }, 240);
   }
 
   function navigateHistory(delta) {
@@ -2975,6 +3006,17 @@
   els.clearMapsBtn.onclick = clearMaps;
   els.clearHistoryBtn.onclick = () => { void clearRenderHistory(); };
   els.logClearBtn.onclick = clearLog;
+  function syncRangeFill(el) {
+    const min = Number(el.min) || 0;
+    const max = Number(el.max) || 100;
+    const pct = max > min ? ((Number(el.value) - min) / (max - min)) * 100 : 0;
+    el.style.setProperty('--fill', pct.toFixed(2) + '%');
+  }
+  document.querySelectorAll('input[type=range]').forEach(syncRangeFill);
+  document.addEventListener('input', (event) => {
+    const el = event.target;
+    if (el instanceof HTMLInputElement && el.type === 'range') syncRangeFill(el);
+  });
   els.pngCompression.addEventListener('input', () => {
     els.pngCompressionVal.textContent = els.pngCompression.value;
   });
