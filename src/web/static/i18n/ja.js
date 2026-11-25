@@ -223,6 +223,7 @@ window.CNCMAPS_I18N.ja = {
   "historyNoMap": "設定を適用しましたが、対応するマップがリストにありません",
   "historyNoParams": "この履歴には保存された設定がありません",
   "logTitle": "レンダリングログ",
+  "logEmpty": "ログはまだありません",
   "logClear": "クリア",
   "versionTitle": "バージョン",
   "cancelBtn": "キャンセル",

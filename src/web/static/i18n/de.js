@@ -223,6 +223,7 @@ window.CNCMAPS_I18N.de = {
   "historyNoMap": "Einstellungen übernommen, aber keine passende Karte in der Liste",
   "historyNoParams": "Dieser Verlaufseintrag hat keine gespeicherten Einstellungen",
   "logTitle": "Render-Protokoll",
+  "logEmpty": "Noch keine Einträge",
   "logClear": "Leeren",
   "versionTitle": "Version",
   "cancelBtn": "Abbrechen",

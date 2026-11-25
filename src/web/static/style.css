@@ -431,9 +431,11 @@ input[type=range]:active::-webkit-slider-thumb{cursor:grabbing;transform:scale(1
 .render-log .rl-head::before{content:none}
 .render-log .rl-head .icon{width:14px;height:14px;flex:none;color:var(--accent-text);opacity:.95}
 .render-log .rl-head::after{
-  content:'›';flex:none;margin-left:6px;font-size:15px;line-height:1;color:var(--muted);
+  content:'›';flex:none;margin-left:8px;font-size:15px;line-height:1;color:var(--muted);
   transition:transform .2s var(--ease),color .18s;
 }
+/* without a count pill the chevron itself has to take the free space */
+.render-log:not(.has-count) .rl-head::after{margin-left:auto}
 .render-log .rl-head:hover::after{color:var(--accent-text)}
 .render-log[open] .rl-head::after{transform:rotate(90deg)}
 .render-log[open] .rl-head{border-bottom:1px solid var(--well-border)}
@@ -447,6 +449,7 @@ input[type=range]:active::-webkit-slider-thumb{cursor:grabbing;transform:scale(1
   max-height:200px;overflow-y:auto;padding:5px 12px 9px;
   font-family:Consolas,monospace;font-size:11px;line-height:1.5;
 }
+.render-log .log-empty{color:var(--muted);opacity:.75;font-family:inherit}
 .log-line{display:flex;align-items:flex-start;gap:7px;padding:2px 0;border-radius:6px;color:var(--toggle-text)}
 .log-line .lt{flex:none;color:var(--muted);opacity:.85;font-variant-numeric:tabular-nums}
 .log-line .ldot{flex:none;width:5px;height:5px;margin-top:6px;border-radius:50%;background:var(--muted)}

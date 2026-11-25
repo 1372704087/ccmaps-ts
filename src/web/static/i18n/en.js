@@ -171,6 +171,7 @@ window.CNCMAPS_I18N.en = {
       'historyNoMap': 'Settings applied, but no matching map is in the list',
       'historyNoParams': 'This history entry has no saved settings',
       'logTitle': 'Render log',
+      'logEmpty': 'No log entries yet',
       'logClear': 'Clear',
       'versionTitle': 'Version',
       'cancelBtn': 'Cancel',

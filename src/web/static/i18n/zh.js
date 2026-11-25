@@ -171,6 +171,7 @@ window.CNCMAPS_I18N.zh = {
       'historyNoMap': '已套用参数，但地图列表中找不到对应地图',
       'historyNoParams': '该历史记录没有保存的渲染参数',
       'logTitle': '渲染日志',
+      'logEmpty': '暂无日志',
       'logClear': '清空',
       'versionTitle': '当前版本',
       'cancelBtn': '取消',

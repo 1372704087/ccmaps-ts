@@ -153,6 +153,7 @@
     populatePresets(els.presetSelect.value === '' ? null : Number(els.presetSelect.value));
     renderHistoryList();
     renderBatchQueue();
+    renderLog();
   }
 
   function setLang(lang) {
@@ -1160,10 +1161,17 @@
   }
 
   function renderLog() {
-    els.renderLog.hidden = logEntries.length === 0;
+    els.renderLog.classList.toggle('has-count', logEntries.length > 0);
     els.logCount.textContent = logEntries.length ? String(logEntries.length) : '';
     const atBottom = els.logBody.scrollHeight - els.logBody.scrollTop - els.logBody.clientHeight < 24;
     els.logBody.innerHTML = '';
+    if (logEntries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'log-empty';
+      empty.textContent = t('logEmpty');
+      els.logBody.appendChild(empty);
+      return;
+    }
     for (const entry of logEntries) {
       const d = new Date(entry.at);
       const hh = String(d.getHours()).padStart(2, '0');

@@ -223,6 +223,7 @@ window.CNCMAPS_I18N.fr = {
   "historyNoMap": "Réglages appliqués, mais aucune carte correspondante dans la liste",
   "historyNoParams": "Cette entrée n'a pas de réglages enregistrés",
   "logTitle": "Journal de rendu",
+  "logEmpty": "Aucun journal",
   "logClear": "Effacer",
   "versionTitle": "Version",
   "cancelBtn": "Annuler",
