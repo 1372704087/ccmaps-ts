@@ -60,6 +60,13 @@ export class VirtualFileSystem {
     if (stat?.isFile()) {
       const ext = path.extname(pathname).toLowerCase();
       if (FormatHelper.MixArchiveExtensions.includes(ext)) {
+        // open the archive lazily: only its directory header is parsed, entries are read on demand
+        const lazy = MixFile.open(pathname);
+        if (lazy != null) {
+          lazy.fileName = pathname;
+          this.allArchives.push(lazy);
+          return true;
+        }
         const mf = new MixFile(fs.readFileSync(pathname), pathname, 0, 0, false);
         mf.fileName = pathname;
         this.allArchives.push(mf);
@@ -68,6 +75,19 @@ export class VirtualFileSystem {
     }
     // virtual mix file
     else if (this.fileExists(pathname)) {
+      // Mix names during loadMixes are relative ('ra2md.mix'); resolve them to the real file so
+      // the archive can be opened lazily instead of being read whole through the DirArchive.
+      for (const archive of this.allArchives) {
+        if (!(archive instanceof DirArchive)) continue;
+        const full = archive.resolvePath(pathname);
+        if (full == null) continue;
+        const lazy = MixFile.open(full);
+        if (lazy != null) {
+          lazy.fileName = pathname;
+          this.allArchives.push(lazy);
+          return true;
+        }
+      }
       const mx = this.open(pathname, FileFormat.Mix) as MixFile | null;
       if (mx == null) return false;
       this.allArchives.push(mx);

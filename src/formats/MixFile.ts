@@ -1,4 +1,5 @@
 // Port of CNCMaps.FileFormats.MixFile
+import * as fs from 'node:fs';
 import { Blowfish } from './encodings/Blowfish.js';
 import { BlowfishKeyProvider } from './encodings/BlowfishKeyProvider.js';
 import { CRC32 } from './encodings/CRC32.js';
@@ -68,6 +69,11 @@ export class MixEntry {
 export class MixFile extends VirtualFile implements IArchive {
   index = new Map<number, MixEntry>();
   private dataStart = 0; // first byte of body, directly after mix header
+  /** Set for archives opened straight from disk: entries are read on demand instead of
+   * keeping the whole (often hundreds of MB) .mix file in the JavaScript heap. */
+  /** Set for archives opened straight from disk: entries are read on demand instead of
+   * keeping the whole (often hundreds of MB) .mix file in the JavaScript heap. */
+  private filePath: string | null = null;
 
   constructor(
     baseStream: Uint8Array,
@@ -79,6 +85,69 @@ export class MixFile extends VirtualFile implements IArchive {
   ) {
     super(baseStream, filename, baseOffset, fileSize < 0 ? baseStream.length : fileSize, isBuffered);
     if (parseHeader) this.parseHeader();
+  }
+
+  /** Opens a .mix file on disk and parses only its directory header. Entries are read with
+   * fs.readSync when the renderer asks for them, so loading the VFS no longer pulls the full
+   * game install into memory. Returns null when the file is not a valid mix archive. */
+  static open(path: string): MixFile | null {
+    let fd: number;
+    try {
+      fd = fs.openSync(path, 'r');
+    } catch {
+      return null;
+    }
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (size < 4) throw new Error('truncated mix');
+      const probe = MixFile.readRange(fd, 0, Math.min(size, 96));
+      const dv = new DataView(probe.buffer, probe.byteOffset, probe.byteLength);
+      const signature = dv.getUint32(0, true);
+      const isCncMix = (signature & 0xffff) !== 0;
+      const isEncrypted = !isCncMix && (signature & MixFileFlags.Encrypted) !== 0;
+
+      let numFiles: number;
+      let headerLength: number;
+      if (isCncMix) {
+        if (probe.length < 2) throw new Error('truncated mix');
+        numFiles = dv.getUint16(0, true);
+        headerLength = 6 + numFiles * MixEntry.SIZE;
+      } else if (!isEncrypted) {
+        if (probe.length < 6) throw new Error('truncated mix');
+        numFiles = dv.getUint16(4, true);
+        headerLength = 10 + numFiles * MixEntry.SIZE;
+      } else {
+        // decrypt just the first block to learn the entry count, like parseHeader does
+        if (probe.length < 84) throw new Error('truncated mix');
+        const reader = new VirtualFile(probe, path, 0, probe.length);
+        const blowfishKey = new BlowfishKeyProvider().decryptKey(reader.read(80));
+        const fish = new Blowfish(blowfishKey);
+        const first = fish.decrypt(new Uint32Array([reader.readUInt32(), reader.readUInt32()]));
+        numFiles = first[0] & 0xffff;
+        headerLength = 84 + ((6 + numFiles * MixEntry.SIZE + 7) & ~7);
+      }
+      if (numFiles <= 0 || headerLength > size) throw new Error('invalid mix header');
+
+      const headerBytes = MixFile.readRange(fd, 0, headerLength);
+      const mix = new MixFile(headerBytes, path, 0, headerBytes.length, false);
+      mix.filePath = path;
+      return mix;
+    } catch {
+      return null;
+    } finally {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+
+  private static readRange(fd: number, offset: number, length: number): Uint8Array {
+    const buf = new Uint8Array(length);
+    let read = 0;
+    while (read < length) {
+      const n = fs.readSync(fd, buf, read, length - read, offset + read);
+      if (n <= 0) break;
+      read += n;
+    }
+    return read === length ? buf : buf.subarray(0, read);
   }
 
   containsFile(filename: string): boolean {
@@ -161,12 +230,27 @@ export class MixFile extends VirtualFile implements IArchive {
   openFile(filename: string, f: FileFormat = FileFormat.None, m: CacheMethod = CacheMethod.Default): VirtualFile | null {
     const e = this.index.get(MixEntry.hashFilename(filename));
     if (!e) return null;
-    return FormatHelper.openAsFormat(this.baseStream, filename, this.baseOffset + this.dataStart + e.offset, e.length, f, m);
+    return this.openEntry(e, filename, f, m);
   }
 
   openFileById(entry: number, filename = '', f: FileFormat = FileFormat.None, m: CacheMethod = CacheMethod.Default): VirtualFile {
     const e = this.index.get(entry)!;
-    return FormatHelper.openAsFormat(this.baseStream, filename, this.baseOffset + this.dataStart + e.offset, e.length, f, m);
+    return this.openEntry(e, filename, f, m);
+  }
+
+  private openEntry(e: MixEntry, filename: string, f: FileFormat, m: CacheMethod): VirtualFile {
+    const start = this.dataStart + e.offset;
+    if (this.filePath == null) {
+      // in-memory archive (nested mix, browser buffer): keep the zero-copy view
+      return FormatHelper.openAsFormat(this.baseStream, filename, this.baseOffset + start, e.length, f, m);
+    }
+    const fd = fs.openSync(this.filePath, 'r');
+    try {
+      const bytes = MixFile.readRange(fd, start, e.length);
+      return FormatHelper.openAsFormat(bytes, filename, 0, bytes.length, f, m);
+    } finally {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
   }
 
   allFileHashes(): IterableIterator<number> {
@@ -174,7 +258,7 @@ export class MixFile extends VirtualFile implements IArchive {
   }
 
   dispose(): void {
-    // nothing to release; base stream is owned by the disk/buffer layer
+    // entries are read with a short-lived file descriptor, so there is nothing to release
   }
 }
 

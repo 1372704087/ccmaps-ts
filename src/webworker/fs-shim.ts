@@ -68,7 +68,7 @@ function siblingKeys(dir: string): string[] {
   return out;
 }
 
-const openFiles = new Map<number, { path: string; chunks: Uint8Array[] }>();
+const openFiles = new Map<number, { path: string; chunks: Uint8Array[]; writable: boolean }>();
 let nextFd = 3;
 
 function toBytes(data: Uint8Array | ArrayBuffer | string): Uint8Array {
@@ -158,11 +158,50 @@ export function writeFileSync(p: string, data: Uint8Array | ArrayBuffer | string
   mountFile(p, toBytes(data));
 }
 
-export function openSync(p: string): number {
+export function openSync(p: string, flags = 'w'): number {
   ensureDir(normalizePath(p).slice(0, normalizePath(p).lastIndexOf('/')) || '/');
   const fd = nextFd++;
-  openFiles.set(fd, { path: normalizePath(p), chunks: [] });
+  openFiles.set(fd, {
+    path: normalizePath(p),
+    chunks: [],
+    // the render engine opens mixes with 'r'; PNG writers open with 'w'
+    writable: !String(flags).includes('r'),
+  });
   return fd;
+}
+
+export function fstatSync(fd: number): any {
+  const file = openFiles.get(fd);
+  if (!file) throw new Error(`EBADF: bad file descriptor ${fd}`);
+  return statSync(file.path);
+}
+
+export function readSync(
+  fd: number,
+  buffer: Uint8Array,
+  offset: number,
+  length: number,
+  position: number | null = null,
+): number {
+  const file = openFiles.get(fd);
+  if (!file) throw new Error(`EBADF: bad file descriptor ${fd}`);
+  const entry = find(file.path);
+  if (!entry || entry.kind !== 'file') throw new Error(`ENOENT: no such file '${file.path}'`);
+  const start = Math.max(0, position ?? 0);
+  if (start >= entry.size) return 0;
+  const want = Math.min(length, entry.size - start);
+  if (entry.data != null) {
+    const n = Math.min(want, entry.data.length - start);
+    if (n <= 0) return 0;
+    buffer.set(entry.data.subarray(start, start + n), offset);
+    return n;
+  }
+  const Reader = (globalThis as any).FileReaderSync;
+  if (typeof Reader !== 'function') throw new Error('FileReaderSync is not available');
+  const slice = entry.blob!.slice(start, start + want);
+  const bytes = new Uint8Array(new Reader().readAsArrayBuffer(slice));
+  buffer.set(bytes, offset);
+  return bytes.length;
 }
 
 export function writeSync(fd: number, data: Uint8Array | ArrayBuffer | string): number {
@@ -177,6 +216,7 @@ export function closeSync(fd: number): void {
   const file = openFiles.get(fd);
   if (!file) return;
   openFiles.delete(fd);
+  if (!file.writable) return;
   const total = file.chunks.reduce((sum, c) => sum + c.length, 0);
   const merged = new Uint8Array(total);
   let offset = 0;

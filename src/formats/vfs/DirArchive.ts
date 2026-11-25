@@ -26,6 +26,13 @@ export class DirArchive implements IArchive {
     return this.index.has(filename.toLowerCase());
   }
 
+  /** Absolute path of a file in this directory, or null. Used to open .mix archives lazily
+   * instead of pulling the whole file into memory. */
+  resolvePath(filename: string): string | null {
+    const actual = this.index.get(filename.toLowerCase());
+    return actual == null ? null : path.join(this.directory, actual);
+  }
+
   openFile(filename: string, format: FileFormat = FileFormat.None, m: CacheMethod = CacheMethod.Default): VirtualFile {
     let data = this.openedFiles.get(filename);
     if (!data) {
