@@ -1171,7 +1171,15 @@
       const ss = String(d.getSeconds()).padStart(2, '0');
       const line = document.createElement('div');
       line.className = 'log-line ' + entry.level;
-      line.textContent = '[' + hh + ':' + mm + ':' + ss + '] ' + entry.text;
+      const time = document.createElement('span');
+      time.className = 'lt';
+      time.textContent = hh + ':' + mm + ':' + ss;
+      const dot = document.createElement('span');
+      dot.className = 'ldot';
+      const msg = document.createElement('span');
+      msg.className = 'lm';
+      msg.textContent = entry.text;
+      line.append(time, dot, msg);
       els.logBody.appendChild(line);
     }
     if (atBottom) els.logBody.scrollTop = els.logBody.scrollHeight;
