@@ -128,7 +128,7 @@
     const cr = $('credit');
     if (cr) {
       cr.innerHTML = '<a href="https://github.com/zzattack/ccmaps-net" target="_blank" rel="noopener noreferrer">CNCMaps - NET</a>'
-        + t('creditHint') + ' | CNCMaps TS · by 1372704087';
+        + t('creditHint') + ' | <a href="https://github.com/1372704087/ccmaps-ts" target="_blank" rel="noopener noreferrer">CNCMaps TS · by 1372704087</a>';
     }
     els.langText.textContent = langMeta.label;
     renderLangMenu();
