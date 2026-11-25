@@ -62,6 +62,30 @@ const CHUNK_IHDR = Buffer.from('IHDR', 'ascii');
 const CHUNK_IDAT = Buffer.from('IDAT', 'ascii');
 const CHUNK_IEND = Buffer.from('IEND', 'ascii');
 
+/** PNG signature, exported for writers that assemble already-compressed bands. */
+export const PNG_SIGNATURE_BYTES = PNG_SIGNATURE;
+
+/** Writes a PNG chunk (length, type, payload, CRC) to an open file descriptor. */
+export function writePngChunk(fd: number, type: string, payload: Buffer): void {
+  writeChunk(fd, Buffer.from(type, 'ascii'), payload);
+}
+
+/** Writes the PNG signature and IHDR for an 8-bit truecolor image. */
+export function writePngHeader(fd: number, width: number, height: number): void {
+  fs.writeSync(fd, PNG_SIGNATURE);
+  const ihdr = Buffer.alloc(13);
+  writeBEU32(ihdr, 0, width);
+  writeBEU32(ihdr, 4, height);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  writeChunk(fd, CHUNK_IHDR, ihdr);
+}
+
+/** The two-byte zlib header that starts the IDAT stream for the given deflate level. */
+export function pngZlibHeader(level: number): Buffer {
+  return Buffer.from([0x78, level === 0 ? 0x01 : 0x9c]);
+}
+
 /**
  * Incremental PNG writer: rows are handed over as they finish rendering and are
  * compressed in bounded chunks, so a banded/streamed render never needs the

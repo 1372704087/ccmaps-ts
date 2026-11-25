@@ -342,6 +342,11 @@ function buildArgs(p) {
   if (streamBands === 'auto' || streamBands === 'on' || streamBands === 'off') args.push('--stream-bands=' + streamBands);
   const renderMemoryMb = clampInt(process.env.CNCMAPS_RENDER_MEMORY_MB, 0, 65536, 0);
   if (renderMemoryMb > 0) args.push('--render-memory-mb=' + renderMemoryMb);
+  // Opt-in multi-core: strips are drawn on worker threads, so streamed output is required.
+  const parallelWorkers = clampInt(process.env.CNCMAPS_PARALLEL_WORKERS, 1, 8, 1);
+  if (parallelWorkers > 1) {
+    args.push('--stream-bands=on', '--parallel-workers=' + parallelWorkers);
+  }
 
   const fmt = p.format === 'psd' ? 'psd' : (p.format === 'jpg' ? 'jpg' : 'png');
   args.push(fmt === 'jpg' ? '--output-jpg' : (fmt === 'psd' ? '--output-psd' : '--output-png'));

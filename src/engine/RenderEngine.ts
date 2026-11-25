@@ -4,6 +4,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as zlib from 'node:zlib';
 import { logger } from '../shared/Log.js';
 import { EngineType, EngineResult, TheaterType } from '../shared/Enums.js';
 import { ModConfig } from '../shared/ModConfig.js';
@@ -23,6 +24,7 @@ import { TileCollection } from './game/TileCollection.js';
 import { Operations } from './map/Operations.js';
 import { FrameDeciders } from './game/FrameDeciders.js';
 import { RenderProgress } from './RenderProgress.js';
+import { runParallelStream } from './render/ParallelBandRenderer.js';
 import { Palette } from '../rendering/Palette.js';
 import { resizeRegionBox } from '../rendering/ImageUtil.js';
 import { Rand } from '../shared/Util.js';
@@ -59,6 +61,24 @@ export class RenderEngine {
     }
     logger.info(`Using ${EngineType[engine]} engine`);
     this.LastEngine = engine;
+
+    // Explicit parallel streaming: hand the whole render to worker threads before this process
+    // pays for its own engine/VFS setup. Each worker plans the same strip layout and draws every
+    // Nth strip; this process only stitches the rows into the PNG.
+    const explicitParallel = settings.ParallelWorkers > 1
+      && settings.StreamBands === 'on'
+      && settings.BandJob == null
+      && settings.OutputSink == null
+      && settings.PreviewWidth === 0
+      && !settings.SavePSD
+      && !(settings.SaveJPEG && !settings.SavePNG);
+    if (explicitParallel) {
+      const outPath = RenderEngine.resolveOutputPath(settings, mapName);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      logger.info(`Streaming ${mapName} on ${settings.ParallelWorkers} worker threads`);
+      runParallelStream({ settings, outPath });
+      return EngineResult.RenderedOk;
+    }
 
     const config = ModConfig.GetDefaultConfig(engine);
 
@@ -147,7 +167,10 @@ export class RenderEngine {
       return EngineResult.Exception;
     }
 
-    // 5. Draw the map.
+    // 5. Draw the map (worker-thread band jobs stop after the shared setup above).
+    if (settings.BandJob != null) {
+      return RenderEngine.renderBandJob(renderer, settings, mapFile, engine, resolvedName);
+    }
     // A 500x500 map renders to 29760x14805 pixels: 3 B colour + 2 B depth per pixel, ~2.2 GB in
     // one canvas. When that does not fit the band budget we draw the map in horizontal strips and
     // downscale each strip into the preview straight away, so the canvas stays at strip size.
@@ -422,6 +445,19 @@ export class RenderEngine {
     const budgetPixels = Math.max(1_000_000, Math.floor((memoryMb * 1024 * 1024) / 5));
     let bandHeight = settings.BandHeight > 0 ? settings.BandHeight : Math.floor(budgetPixels / fullWidth);
     bandHeight = Math.max(128, Math.min(8192, bandHeight));
+    const bandBottom = Math.min(Math.max(1, fullRect.Height), sizeRect.Bottom);
+
+    if (settings.ParallelWorkers > 1) {
+      logger.info(
+        `Streaming ${sizeRect.Width}x${sizeRect.Height} PNG in strips of ${bandHeight}px ` +
+          `on ${settings.ParallelWorkers} worker threads`,
+      );
+      // The workers create their own renderers; this one only measured the framing.
+      renderer.FreeUseless();
+      runParallelStream({ settings, outPath });
+      return EngineResult.RenderedOk;
+    }
+
     logger.info(
       `Streaming ${sizeRect.Width}x${sizeRect.Height} PNG in strips of ${bandHeight}px ` +
         `(memory budget ${memoryMb} MB)`,
@@ -429,10 +465,13 @@ export class RenderEngine {
 
     const writer = new PngStreamWriter(outPath, sizeRect.Width, sizeRect.Height, 3, settings.PNGQuality);
     const top0 = Math.max(0, sizeRect.Top);
-    const bottom = Math.min(Math.max(1, fullRect.Height), sizeRect.Bottom);
+    const bottom = bandBottom;
     try {
       for (let top = top0; top < bottom; top += bandHeight) {
         const height = Math.min(bandHeight, bottom - top);
+        // Strips are independent: restart the random stream so a parallel worker can render
+        // exactly the same pixels for its own strips.
+        Rand.reset();
         renderer.Draw({ originY: top, height });
         if (settings.MarkIceGrowth) renderer.MarkIceGrowth();
         if (settings.TunnelPaths) renderer.PlotTunnels(settings.TunnelPosition);
@@ -472,8 +511,149 @@ export class RenderEngine {
     return EngineResult.RenderedOk;
   }
 
-  /// <summary>Draws the map in horizontal strips and downscales each strip straight into the
-  /// preview image, so the peak canvas is one strip instead of the whole map.</summary>
+  /** Worker-thread entry: works out the strip layout, renders every Nth strip and writes the
+   * cropped rows to scratch files the parent stitches into the final PNG. */
+  private static renderBandJob(
+    renderer: MapRenderer,
+    settings: RenderSettings,
+    mapFile: MapFile,
+    engine: EngineType,
+    resolvedName: string,
+  ): EngineResult {
+    const job = settings.BandJob!;
+    const ctl = settings.BandJobControl;
+
+    let sizeRect: Rectangle;
+    let bands: { index: number; top: number; height: number }[];
+    if (job.workerIndex === 0) {
+      renderer.MeasureTileTouchState();
+      const fullRect = renderer.GetFullMapSizePixels();
+      sizeRect = RenderEngine.applyOutputFraming(renderer.GetSizePixels(settings.SizeMode), settings, fullRect);
+      if (sizeRect.Width <= 0 || sizeRect.Height <= 0) {
+        renderer.FreeUseless();
+        return EngineResult.Exception;
+      }
+      const fullWidth = Math.max(1, fullRect.Width);
+      const memoryMb = settings.RenderMemoryMb > 0 ? settings.RenderMemoryMb : RenderEngine.defaultRenderMemoryMb();
+      const budgetPixels = Math.max(1_000_000, Math.floor((memoryMb * 1024 * 1024) / 5));
+      let bandHeight = settings.BandHeight > 0 ? settings.BandHeight : Math.floor(budgetPixels / fullWidth);
+      bandHeight = Math.max(128, Math.min(8192, bandHeight));
+      const top0 = Math.max(0, sizeRect.Top);
+      const bottom = Math.min(Math.max(1, fullRect.Height), sizeRect.Bottom);
+      bands = [];
+      for (let top = top0; top < bottom; top += bandHeight) {
+        bands.push({ index: bands.length, top, height: Math.min(bandHeight, bottom - top) });
+      }
+      fs.writeFileSync(
+        path.join(job.outDir, 'layout.json'),
+        JSON.stringify({ left: sizeRect.Left, top: sizeRect.Top, width: sizeRect.Width, height: sizeRect.Height, bands }),
+      );
+    } else {
+      // worker 0 publishes the measured framing; the other workers reuse it instead of
+      // repeating the whole tile survey.
+      const layoutFile = path.join(job.outDir, 'layout.json');
+      const sleeper = new Int32Array(new SharedArrayBuffer(4));
+      let layout: {
+        left: number; top: number; width: number; height: number;
+        bands: { index: number; top: number; height: number }[];
+      } | null = null;
+      for (let i = 0; i < 1200; i++) {
+        if (fs.existsSync(layoutFile)) {
+          try {
+            layout = JSON.parse(fs.readFileSync(layoutFile, 'utf8'));
+            break;
+          } catch { /* worker 0 may still be writing it */ }
+        }
+        Atomics.wait(sleeper, 0, 0, 50);
+      }
+      if (layout == null) {
+        renderer.FreeUseless();
+        throw new Error('band worker: framing layout was not published');
+      }
+      sizeRect = new Rectangle(layout.left, layout.top, layout.width, layout.height);
+      bands = layout.bands;
+    }
+    const assigned = bands.filter((b) => b.index % job.workerCount === job.workerIndex);
+    const rowBytes = sizeRect.Width * 3;
+
+    try {
+      for (let i = 0; i < assigned.length; i++) {
+        const band = assigned[i];
+        // every strip starts from the same random state, matching the single-thread path
+        Rand.reset();
+        renderer.Draw({ originY: band.top, height: band.height });
+        if (settings.MarkIceGrowth) renderer.MarkIceGrowth();
+        if (settings.TunnelPaths) renderer.PlotTunnels(settings.TunnelPosition);
+        if (settings.MarkStartPos) renderer.DrawStartPositions();
+        const surface = renderer.GetDrawingSurface();
+        // Compress this strip right away: the parent only concatenates the deflate blocks and
+        // never needs the raw pixels, which keeps the hand-off cheap.
+        const parts: Buffer[] = [];
+        let adlerA = 1;
+        let adlerB = 0;
+        let rawLength = 0;
+        const maxRaw = 4 * 1024 * 1024;
+        const rowsPerChunk = Math.max(1, Math.min(band.height, Math.floor(maxRaw / (rowBytes + 1))));
+        for (let row0 = 0; row0 < band.height; row0 += rowsPerChunk) {
+          const rows = Math.min(rowsPerChunk, band.height - row0);
+          const raw = new Uint8Array((rowBytes + 1) * rows);
+          let dst = 0;
+          for (let y = 0; y < rows; y++) {
+            raw[dst++] = 0; // filter: None
+            let src = ((row0 + y) * surface.Width + sizeRect.Left) * 3;
+            for (let x = 0; x < sizeRect.Width; x++) {
+              raw[dst++] = surface.data[src + 2];
+              raw[dst++] = surface.data[src + 1];
+              raw[dst++] = surface.data[src];
+              src += 3;
+            }
+          }
+          rawLength += raw.length;
+          let i = 0;
+          while (i < raw.length) {
+            const end = Math.min(raw.length, i + 5552);
+            for (; i < end; i++) {
+              adlerA += raw[i];
+              adlerB += adlerA;
+            }
+            adlerA %= 65521;
+            adlerB %= 65521;
+          }
+          const finalChunk = band.index === bands.length - 1 && row0 + rows >= band.height;
+          parts.push(zlib.deflateRawSync(raw, {
+            level: settings.PNGQuality,
+            finishFlush: finalChunk ? zlib.constants.Z_FINISH : zlib.constants.Z_SYNC_FLUSH,
+          }));
+        }
+        fs.writeFileSync(path.join(job.outDir, `band-${band.index}.deflate`), Buffer.concat(parts));
+        fs.writeFileSync(
+          path.join(job.outDir, `band-${band.index}.json`),
+          JSON.stringify({ a: adlerA, b: adlerB, len: rawLength }),
+        );
+        renderer.ReleaseDrawingSurface();
+        if (ctl) {
+          Atomics.store(ctl, 2 + job.workerIndex, Math.round(((i + 1) / Math.max(1, assigned.length)) * 100));
+        }
+      }
+
+      if (job.workerIndex === 0 && settings.MetadataOutFile !== '') {
+        const mapStats = renderer.ComputeStats();
+        RenderEngine.writeMetadataJson(
+          settings.MetadataOutFile,
+          resolvedName,
+          mapFile,
+          renderer,
+          sizeRect,
+          new Rectangle(0, 0, sizeRect.Width, sizeRect.Height),
+          mapStats,
+          engine,
+        );
+      }
+    } finally {
+      renderer.FreeUseless();
+    }
+    return EngineResult.RenderedOk;
+  }
   static renderBandedPreview(renderer: MapRenderer, settings: RenderSettings, save: (canvas: DrawingSurface) => void, bandHeight: number, layout?: { sourceRect?: Rectangle }): Rectangle {
     // The preview is "the size-mode rect scaled to the requested width", exactly as the single
     // canvas path saves it. That rect is only final once every tile has been drawn (the local view
