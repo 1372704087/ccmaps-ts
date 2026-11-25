@@ -265,6 +265,12 @@ export class VxlRenderer {
     // game-accurate lighting: precompute which vpl page every normal maps to
     const vplPages = this.vpl != null ? this.preCalculateVplLighting(section.getNormals(), direction) : null;
 
+    const width = surface.Width;
+    const height = surface.Height;
+    const data = surface.data;
+    const rgb = obj.Palette.getRgbValues();
+    const vpl = this.vpl;
+
     for (let wy = 0; wy < section.SizeY; wy++) {
       const dy = maxY ? section.SizeY - 1 - wy : wy;
       for (let wx = 0; wx < section.SizeX; wx++) {
@@ -281,7 +287,7 @@ export class VxlRenderer {
           const py = ((colY + wz * stepZy) & 0xffff) >> 8;
           const sx = px + originX;
           const sy = py + originY;
-          if (sx < 0 || sx >= surface.Width || sy < 0 || sy >= surface.Height) continue;
+          if (sx < 0 || sx >= width || sy < 0 || sy >= height) continue;
 
           let cr = 0;
           let cg = 0;
@@ -289,22 +295,26 @@ export class VxlRenderer {
           if (vplPages != null) {
             // like the game: remap the palette index through voxels.vpl
             // for the lighting page this voxel's normal maps to
-            const remapped = this.vpl!.getPaletteIndex(vplPages[vx.NormalIndex], vx.ColorIndex);
-            const color = obj.Palette.Colors[remapped];
-            cr = color.R;
-            cg = color.G;
-            cb = color.B;
+            const remapped = vpl!.getPaletteIndex(vplPages[vx.NormalIndex], vx.ColorIndex);
+            const ci = remapped * 3;
+            cr = rgb[ci];
+            cg = rgb[ci + 1];
+            cb = rgb[ci + 2];
           } else {
-            const color = obj.Palette.Colors[vx.ColorIndex];
+            const ci = vx.ColorIndex * 3;
             const normal = section.getNormal(vx.NormalIndex);
             // shader function taken from https://github.com/OpenRA/OpenRA/blob/bleed/cg/vxl.fx
             const mult = Math.max(Vector3.Dot(normal, lightDirection), 0);
             const colorMult = Vector3.Add(VxlRenderer.Ambient, Vector3.MultiplyScalar(VxlRenderer.Diffuse, mult));
-            cr = Math.trunc(Math.min(255, color.R * colorMult.X));
-            cg = Math.trunc(Math.min(255, color.G * colorMult.Y));
-            cb = Math.trunc(Math.min(255, color.B * colorMult.Z));
+            cr = Math.trunc(Math.min(255, rgb[ci] * colorMult.X));
+            cg = Math.trunc(Math.min(255, rgb[ci + 1] * colorMult.Y));
+            cb = Math.trunc(Math.min(255, rgb[ci + 2] * colorMult.Z));
           }
-          this.setPixel(surface, sx, sy, cr, cg, cb);
+          const pix = (sy * width + sx) * 4;
+          data[pix] = cb;
+          data[pix + 1] = cg;
+          data[pix + 2] = cr;
+          data[pix + 3] = 255;
         }
       }
     }
@@ -352,14 +362,6 @@ export class VxlRenderer {
         if (px + 1 >= 0 && px + 1 < surface.Width) shadBuf[py * surface.Width + px + 1] = 1;
       }
     }
-  }
-
-  private setPixel(surface: DrawingSurface, x: number, y: number, r: number, g: number, b: number): void {
-    const pix = (y * surface.Width + x) * 4;
-    surface.data[pix] = b;
-    surface.data[pix + 1] = g;
-    surface.data[pix + 2] = r;
-    surface.data[pix + 3] = 255;
   }
 
   static GetBounds(obj: GameObjectLike, vxl: VxlFile, hva: HvaFile, props: DrawProperties): Rectangle {

@@ -45,6 +45,7 @@ export class TmpRenderer {
     const zBuffer = ds.getZBuffer();
     const p = tile.Palette;
     let bgr = p.getBgrBytes();
+    const tileData = img.TileData;
     const zData = img.ZData;
     const zBase = Math.trunc((tile.Rx + tile.Ry) * tmp.BlockHeight / 2);
     const hBufVal = Math.trunc(tile.Z * this.config.TileHeight / 2);
@@ -112,7 +113,7 @@ export class TmpRenderer {
       if (plain && rowStart >= 0 && rowStart + cx <= pixelHigh) {
         if (useZ) {
           for (let c = 0; c < cx; c++) {
-            const paletteValue = img.TileData[rIdx];
+            const paletteValue = tileData[rIdx];
             if (paletteValue !== 0) {
               const zv = zBase - zData![rIdx];
               const zi = rowStart + c;
@@ -129,7 +130,7 @@ export class TmpRenderer {
           }
         } else {
           for (let c = 0; c < cx; c++) {
-            const paletteValue = img.TileData[rIdx];
+            const paletteValue = tileData[rIdx];
             if (paletteValue !== 0) {
               const ci = paletteValue * 3;
               data[w] = bgr[ci];
@@ -143,7 +144,7 @@ export class TmpRenderer {
         zIdx = rowStart + cx;
       } else {
         for (let c = 0; c < cx; c++) {
-          const paletteValue = img.TileData[rIdx];
+          const paletteValue = tileData[rIdx];
           const zBufVal = zBase - (useZ ? zData![rIdx] : 0);
           if (paletteValue !== 0 && zIdx >= 0 && zIdx < pixelHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
             const ci = paletteValue * 3;
@@ -188,7 +189,7 @@ export class TmpRenderer {
       if (plain && rowStart >= 0 && rowStart + cx <= pixelHigh) {
         if (useZ) {
           for (let c = 0; c < cx; c++) {
-            const paletteValue = img.TileData[rIdx];
+            const paletteValue = tileData[rIdx];
             if (paletteValue !== 0) {
               const zv = zBase - zData![rIdx];
               const zi = rowStart + c;
@@ -205,7 +206,7 @@ export class TmpRenderer {
           }
         } else {
           for (let c = 0; c < cx; c++) {
-            const paletteValue = img.TileData[rIdx];
+            const paletteValue = tileData[rIdx];
             if (paletteValue !== 0) {
               const ci = paletteValue * 3;
               data[w] = bgr[ci];
@@ -219,7 +220,7 @@ export class TmpRenderer {
         zIdx = rowStart + cx;
       } else {
         for (let c = 0; c < cx; c++) {
-          const paletteValue = img.TileData[rIdx];
+          const paletteValue = tileData[rIdx];
           const zBufVal = zBase - (useZ ? zData![rIdx] : 0);
           if (paletteValue !== 0 && zIdx >= 0 && zIdx < pixelHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
             const ci = paletteValue * 3;

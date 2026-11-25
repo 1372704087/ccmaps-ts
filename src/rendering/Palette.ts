@@ -20,14 +20,35 @@ export class Palette {
   static QuantizeIntensity = false;
 
   Name = '';
-  Colors: Color[] = new Array(256).fill(null).map(() => new Color(0, 0, 0, 0));
   IsShared = false;
 
   private originalPalette: PalFile | null = null;
   private isObjectPalette = false;
   private originalColorsLoaded = false;
   private origColors: Uint8Array | null = null;
+  /** The 256 drawing colours as r,g,b doubles. Keeping them in one buffer avoids allocating
+   * 256 Color objects on every recalculate/clone; rendering reads this projection. */
+  private rgb = new Float64Array(768);
+  /** Object view of rgb, built only for callers that want Color instances. */
+  private colorView: Color[] | null = null;
   private bgr: Uint8Array | null = null;
+
+  /** Color[] view of the palette (compatibility for callers outside the draw loops). */
+  get Colors(): Color[] {
+    if (this.colorView == null) {
+      const view: Color[] = new Array(256);
+      for (let i = 0; i < 256; i++) {
+        view[i] = new Color(this.rgb[i * 3], this.rgb[i * 3 + 1], this.rgb[i * 3 + 2]);
+      }
+      this.colorView = view;
+    }
+    return this.colorView;
+  }
+
+  /** The raw r,g,b doubles, three per index, for the hot draw loops. */
+  getRgbValues(): Float64Array {
+    return this.rgb;
+  }
 
   private redMult = 1.0;
   private greenMult = 1.0;
@@ -50,12 +71,13 @@ export class Palette {
   clone(): Palette {
     const p = new Palette();
     p.Name = this.Name;
-    p.Colors = new Array(256).fill(null).map((_, i) => this.Colors[i].Clone());
+    p.rgb = this.rgb.slice();
     p.IsShared = false;
     p.originalPalette = this.originalPalette;
     p.isObjectPalette = this.isObjectPalette;
     p.originalColorsLoaded = this.originalColorsLoaded;
     p.origColors = this.origColors ? this.origColors.slice() : null;
+    p.bgr = this.bgr ? this.bgr.slice() : null;
     p.redMult = this.redMult;
     p.greenMult = this.greenMult;
     p.blueMult = this.blueMult;
@@ -66,12 +88,13 @@ export class Palette {
   /** Colors as B,G,R triplets, rebuilt after every Recalculate. */
   getBgrBytes(): Uint8Array {
     if (this.bgr == null) {
-      this.bgr = new Uint8Array(768);
-      for (let i = 0; i < 256; i++) {
-        this.bgr[i * 3 + 0] = this.Colors[i].B;
-        this.bgr[i * 3 + 1] = this.Colors[i].G;
-        this.bgr[i * 3 + 2] = this.Colors[i].R;
+      const bgr = new Uint8Array(768);
+      for (let i = 0; i < 768; i += 3) {
+        bgr[i] = this.rgb[i + 2];
+        bgr[i + 1] = this.rgb[i + 1];
+        bgr[i + 2] = this.rgb[i];
       }
+      this.bgr = bgr;
     }
     return this.bgr;
   }
@@ -150,6 +173,7 @@ export class Palette {
     }
 
     const orig = this.origColors!;
+    const rgb = this.rgb;
     for (let i = 0; i < 256; i++) {
       let rm = rmult;
       let gm = gmult;
@@ -157,30 +181,34 @@ export class Palette {
       if (i >= 240 && i <= 254 && this.isObjectPalette) {
         rm = gm = bm = 1.0;
       }
-      const r = Math.min(255, (orig[i * 3 + 0] * rm) / 63.0 * 255.0);
-      const g = Math.min(255, (orig[i * 3 + 1] * gm) / 63.0 * 255.0);
-      const b = Math.min(255, (orig[i * 3 + 2] * bm) / 63.0 * 255.0);
-      this.Colors[i] = new Color(r, g, b);
+      const o = i * 3;
+      rgb[o] = Math.min(255, (orig[o] * rm) / 63.0 * 255.0);
+      rgb[o + 1] = Math.min(255, (orig[o + 1] * gm) / 63.0 * 255.0);
+      rgb[o + 2] = Math.min(255, (orig[o + 2] * bm) / 63.0 * 255.0);
     }
     this.bgr = null;
+    this.colorView = null;
   }
 
   static makePalette(c: Color): Palette {
     const p = new Palette();
-    for (let i = 0; i < 256; i++) p.Colors[i] = c;
+    const rgb = p.rgb;
+    for (let i = 0; i < 768; i += 3) {
+      rgb[i] = c.R;
+      rgb[i + 1] = c.G;
+      rgb[i + 2] = c.B;
+    }
     p.originalColorsLoaded = true;
     return p;
   }
 
   static merge(A: Palette, B: Palette, opacity: number): Palette {
     const p = new Palette();
-    for (let i = 0; i < 256; i++) {
-      p.Colors[i] = new Color(
-        Math.trunc(A.Colors[i].R * opacity + B.Colors[i].R * (1.0 - opacity)),
-        Math.trunc(A.Colors[i].G * opacity + B.Colors[i].G * (1.0 - opacity)),
-        Math.trunc(A.Colors[i].B * opacity + B.Colors[i].B * (1.0 - opacity)),
-        A.Colors[i].A,
-      );
+    const a = A.rgb;
+    const b = B.rgb;
+    const out = p.rgb;
+    for (let i = 0; i < 768; i++) {
+      out[i] = Math.trunc(a[i] * opacity + b[i] * (1.0 - opacity));
     }
     return p;
   }

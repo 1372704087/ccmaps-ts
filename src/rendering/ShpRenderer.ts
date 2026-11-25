@@ -459,8 +459,13 @@ export class ShpRenderer {
     // darkens the ground by half) written into the object's own layer.
     const shadowPart = ds.beginPart(offset.X - ds.OriginX, offset.Y - ds.OriginY, img.Width, img.Height);
 
-    let w = (offset.X - ds.OriginX) * 3 + stride * (offset.Y - ds.OriginY);
-    let zIdx = offset.X - ds.OriginX + (offset.Y - ds.OriginY) * ds.Width;
+    const imgWidth = img.Width;
+    const originX = offset.X - ds.OriginX;
+    const originY = offset.Y - ds.OriginY;
+    const dsWidth = ds.Width;
+    const dsHeight = ds.Height;
+    let w = originX * 3 + stride * originY;
+    let zIdx = originX + originY * dsWidth;
     let rIdx = 0;
 
     // Shadows lie on the caster's ground plane, a per-class lift in front of it: gamemd draws
@@ -478,25 +483,25 @@ export class ShpRenderer {
     const zBase = idiv((t.Rx + t.Ry) * tileHeight, 2);
 
     for (let y = 0; y < img.Height; y++) {
-      if (offset.Y - ds.OriginY + y < 0) {
+      const ly = originY + y;
+      if (ly < 0 || ly >= dsHeight) {
         w += stride;
-        rIdx += img.Width;
-        zIdx += ds.Width;
+        rIdx += imgWidth;
+        zIdx += dsWidth;
         continue; // out of bounds
       }
 
       // as in Draw: the ramp lift is a screen offset, not a depth one
       const zBufVal = toShort(zBase + (offset.Y + y + rampLift) - cellBottomY + shadowLift);
 
-      for (let x = 0; x < img.Width; x++) {
-        const lx = offset.X - ds.OriginX + x;
-        const ly = offset.Y - ds.OriginY + y;
-        const art = imgData[rIdx] !== 0;
-        if (
-          0 <= lx && lx < ds.Width && 0 <= ly && ly < ds.Height &&
-          art &&
-          zBufVal > zBuffer[zIdx]
-        ) {
+      // clip the sprite row once instead of testing the same bounds for every pixel
+      const xStart = Math.max(0, Math.min(imgWidth, -originX));
+      const xEnd = Math.max(xStart, Math.min(imgWidth, dsWidth - originX));
+      w += 3 * xStart;
+      zIdx += xStart;
+      rIdx += xStart;
+      for (let x = xStart; x < xEnd; x++) {
+        if (imgData[rIdx] !== 0 && zBufVal > zBuffer[zIdx]) {
           data[w] = Math.trunc(data[w] / 2);
           data[w + 1] = Math.trunc(data[w + 1] / 2);
           data[w + 2] = Math.trunc(data[w + 2] / 2);
@@ -504,7 +509,7 @@ export class ShpRenderer {
           // Only pixels the game actually darkened become the layer's shadow; capturing the
           // whole sprite would paint shadow where the z-test rejected it (bridges, cliffs).
           if (shadowPart != null) {
-            const pi = (y * img.Width + x) * 4;
+            const pi = (y * imgWidth + x) * 4;
             shadowPart.data[pi] = 0;
             shadowPart.data[pi + 1] = 0;
             shadowPart.data[pi + 2] = 0;
@@ -516,8 +521,11 @@ export class ShpRenderer {
         zIdx++;
         w += 3;
       }
-      w += stride - 3 * img.Width; // ... and if we're no more on the same row,
-      zIdx += ds.Width - img.Width; // adjust the writing pointer accordingly
+      // ... and if we're no more on the same row, adjust the writing pointer accordingly
+      const rest = imgWidth - xEnd;
+      w += stride - 3 * xEnd;
+      zIdx += dsWidth - xEnd;
+      rIdx += rest;
     }
   }
 

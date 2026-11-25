@@ -134,47 +134,57 @@ export class VoxelDrawable extends Drawable {
       vxl_ds.Height,
     );
 
+    const dsWidth = ds.Width;
+    const dsHeight = ds.Height;
+    const dsStride = ds.Stride;
+    const dstData = ds.data;
+    const srcData = vxl_ds.data;
+    const srcWidth = vxl_ds.Width;
+    const srcStride = vxl_ds.Stride;
+    const originX = d.X - ds.OriginX;
+    const originY = d.Y - ds.OriginY;
+
     for (let y = 0; y < vxl_ds.Height; y++) {
-      const srcRowBase = vxl_ds.Stride * y;
+      const srcRowBase = srcStride * y;
       // banded surfaces hold one strip of the map: z stays in map coordinates, the write cursor
       // moves into the surface's own space
-      const oy = d.Y - ds.OriginY;
-      const ox = d.X - ds.OriginX;
-      const bodyRowBase = (oy + y - flight) * ds.Stride + ox * 3;
-      const shadRowBase = (oy + y) * ds.Stride + ox * 3;
-      let zIdx = (oy + y - flight) * ds.Width + ox;
-      const bodyRowValid = oy + y - flight >= 0 && oy + y - flight < ds.Height;
-      const shadRowValid = oy + y >= 0 && oy + y < ds.Height;
+      const bodyRow = originY + y - flight;
+      const bodyRowBase = bodyRow * dsStride + originX * 3;
+      const shadRowBase = (originY + y) * dsStride + originX * 3;
+      let zIdx = bodyRow * dsWidth + originX;
+      const bodyRowValid = bodyRow >= 0 && bodyRow < dsHeight;
+      const shadRowValid = originY + y >= 0 && originY + y < dsHeight;
       if (!bodyRowValid && !shadRowValid) continue;
 
       const zBufVal = zBase + Math.trunc((anchorY - (d.Y + y - flight)) / 3);
       const zShadowVal = zShadowBase + (d.Y + y) - cellBottomY;
+      const shadowIdxOffset = flight * dsWidth;
 
       for (let x = 0; x < vxl_ds.Width; x++) {
         const srcBase = srcRowBase + x * 4;
-        const bodyPx = vxl_ds.data[srcBase + 3] > 0;
+        const bodyPx = srcData[srcBase + 3] > 0;
         // only non-transparent pixels in front of what the buffer holds
         if (bodyPx && bodyRowValid) {
           const wIdx = bodyRowBase + x * 3;
-          const srcB = vxl_ds.data[srcBase];
-          const srcG = vxl_ds.data[srcBase + 1];
-          const srcR = vxl_ds.data[srcBase + 2];
+          const srcB = srcData[srcBase];
+          const srcG = srcData[srcBase + 1];
+          const srcR = srcData[srcBase + 2];
           if (zBufVal > zBuffer[zIdx]) {
             if (transLucency !== 0) {
-              ds.data[wIdx] = Math.trunc(a * ds.data[wIdx] + b * srcB);
-              ds.data[wIdx + 1] = Math.trunc(a * ds.data[wIdx + 1] + b * srcG);
-              ds.data[wIdx + 2] = Math.trunc(a * ds.data[wIdx + 2] + b * srcR);
+              dstData[wIdx] = Math.trunc(a * dstData[wIdx] + b * srcB);
+              dstData[wIdx + 1] = Math.trunc(a * dstData[wIdx + 1] + b * srcG);
+              dstData[wIdx + 2] = Math.trunc(a * dstData[wIdx + 2] + b * srcR);
             } else {
-              ds.data[wIdx] = srcB;
-              ds.data[wIdx + 1] = srcG;
-              ds.data[wIdx + 2] = srcR;
+              dstData[wIdx] = srcB;
+              dstData[wIdx + 1] = srcG;
+              dstData[wIdx + 2] = srcR;
             }
             if (categories != null) categories[zIdx] = category;
             if (voxelMask != null) voxelMask[zIdx] = 1;
             // Only pixels the game actually wrote go into the layer; kept z-rejected pixels
             // would stack a hidden body above the sprite the game shows.
-            const sx = ox + x;
-            if (layer != null && sx >= 0 && sx < ds.Width) {
+            const sx = originX + x;
+            if (layer != null && sx >= 0 && sx < dsWidth) {
               const li = zIdx * 4;
               layer[li] = srcR;
               layer[li + 1] = srcG;
@@ -182,7 +192,7 @@ export class VoxelDrawable extends Drawable {
               layer[li + 3] = 255;
             }
             if (elementPart != null) {
-              const pi = (y * vxl_ds.Width + x) * 4;
+              const pi = (y * srcWidth + x) * 4;
               elementPart.data[pi] = srcR;
               elementPart.data[pi + 1] = srcG;
               elementPart.data[pi + 2] = srcB;
@@ -193,16 +203,16 @@ export class VoxelDrawable extends Drawable {
         // shadows lie on the caster's ground plane and darken only where that
         // plane is in front of the buffer; the body pixels drawn by this same
         // blit keep covering their own shadow
-        if ((!bodyPx || flight !== 0) && shadRowValid && shadowBufVxl[x + y * vxl_ds.Width]) {
-          const shadIdx = (oy + y) * ds.Width + ox + x;
+        if ((!bodyPx || flight !== 0) && shadRowValid && shadowBufVxl[x + y * srcWidth]) {
+          const shadIdx = zIdx + shadowIdxOffset;
           if (zShadowVal > zBuffer[shadIdx]) {
             const swIdx = shadRowBase + x * 3;
-            ds.data[swIdx] = Math.trunc(ds.data[swIdx] / 2);
-            ds.data[swIdx + 1] = Math.trunc(ds.data[swIdx + 1] / 2);
-            ds.data[swIdx + 2] = Math.trunc(ds.data[swIdx + 2] / 2);
+            dstData[swIdx] = Math.trunc(dstData[swIdx] / 2);
+            dstData[swIdx + 1] = Math.trunc(dstData[swIdx + 1] / 2);
+            dstData[swIdx + 2] = Math.trunc(dstData[swIdx + 2] / 2);
             // Keep only the shadow the game actually drew with the unit in the PSD.
             if (shadowPart != null) {
-              const pi = (y * vxl_ds.Width + x) * 4;
+              const pi = (y * srcWidth + x) * 4;
               shadowPart.data[pi] = 0;
               shadowPart.data[pi + 1] = 0;
               shadowPart.data[pi + 2] = 0;
