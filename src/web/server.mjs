@@ -9,6 +9,7 @@ import * as os from 'node:os';
 import { spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const STATIC_DIR = path.join(ROOT, 'src', 'web', 'static');
@@ -48,6 +49,9 @@ const IMAGE_TTL_MS = 30 * 60 * 1000;
 const IMAGE_MAX = 16;
 const IMAGE_MAX_BYTES = clampInt(process.env.CNCMAPS_IMAGE_CACHE_BYTES, 16 * 1024 * 1024, 4 * 1024 * 1024 * 1024, 256 * 1024 * 1024);
 const RENDER_QUEUE_MAX = clampInt(process.env.CNCMAPS_RENDER_QUEUE_MAX, 1, 1024, 64);
+// Opt-in: when the same map bytes are rendered again with identical parameters, copy the
+// previously produced image instead of rendering it again. Off unless explicitly enabled.
+const RESULT_CACHE = /^(1|true|yes|on)$/i.test(String(process.env.CNCMAPS_RENDER_CACHE ?? ''));
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(SCRATCH_DIR, { recursive: true });
@@ -172,6 +176,16 @@ function uploadDirBytes() {
 // the process heap means a 100 MB PNG no longer sits in RSS until it is evicted.
 const imageCache = new Map();
 let imageCacheBytes = 0;
+// Opt-in result reuse: cache key -> { token, meta, at }. The image itself lives in imageCache,
+// so eviction or expiry of that token drops the reuse entry with it.
+const resultCache = new Map();
+const resultTokenKeys = new Map();
+function dropResultForToken(token) {
+  const key = resultTokenKeys.get(token);
+  if (key == null) return;
+  resultTokenKeys.delete(token);
+  resultCache.delete(key);
+}
 function unlinkQuiet(file) {
   try { fs.unlinkSync(file); return true; } catch { return false; }
 }
@@ -180,6 +194,7 @@ function cacheDelete(token) {
   if (!old) return;
   imageCacheBytes -= old.size || 0;
   imageCache.delete(token);
+  dropResultForToken(token);
   if (old.file && !unlinkQuiet(old.file)) {
     // a download may still have the file open (Windows); retry once it closes
     setTimeout(() => {
@@ -465,7 +480,23 @@ function buildArgs(p) {
     mime,
     url: '/image/' + token,
     downloadUrl: '/download/' + token,
+    // PSD keeps a second preview file, so it always renders; everything else can be reused.
+    cacheKey: RESULT_CACHE && fmt !== 'psd' && m.hash ? renderCacheKey(m.hash, settings) : '',
   };
+}
+
+/** Everything that changes the output pixels, keyed by the uploaded map's content hash. */
+function renderCacheKey(mapHash, s) {
+  return JSON.stringify([
+    mapHash,
+    s.format, s.pngQuality, s.jpegQuality,
+    s.engine, s.sizeMode, s.previewWidth, s.crop, s.aspect,
+    s.markStartPos, s.markerShape, s.markerSize, s.markOre,
+    s.tunnelPaths, s.tunnelPosition, s.markIceGrowth,
+    s.compressTiles, s.fixOverlays, s.fixupTiles, s.ignoreLighting, s.noExpandMixes,
+    s.maxSurfacePixels, s.streamBands, s.renderMemoryMb, s.parallelWorkers,
+    s.mixDirs,
+  ]);
 }
 
 let activeRenderJobs = 0;
@@ -560,6 +591,10 @@ async function finishSuccess(record) {
       file: job.outFile, size: mainStat.size, name: job.name, mime: job.mime, at: Date.now(),
     });
     record.keepDir = true;
+    if (RESULT_CACHE && job.cacheKey) {
+      resultCache.set(job.cacheKey, { token: job.token, meta, at: Date.now() });
+      resultTokenKeys.set(job.token, job.cacheKey);
+    }
     let previewUrl = null;
     if (job.fmt === 'psd') {
       const previewFile = job.outFile.replace(/\.psd$/i, '') + '.preview.png';
@@ -759,6 +794,7 @@ function streamRender(req, res, params) {
       return;
     }
     record.wnd({ type: 'start', url: job.url, name: job.name, engine: job.engine });
+    if (RESULT_CACHE && job.cacheKey && serveFromResultCache(record)) return;
     if (USE_POOL) {
       try {
         if (startPooled(record, job)) return;
@@ -826,6 +862,31 @@ function streamRender(req, res, params) {
       }
     }
   }
+}
+
+/** Copies a previously rendered image into this job's own token so the response keeps its own
+ * cache entry and lifetime. Returns true when the job was served. */
+function serveFromResultCache(record) {
+  const job = record.job;
+  const entry = resultCache.get(job.cacheKey);
+  if (entry == null) return false;
+  const image = cacheGet(entry.token);
+  if (image == null) {
+    resultCache.delete(job.cacheKey);
+    return false;
+  }
+  try {
+    fs.copyFileSync(image.file, job.outFile);
+    if (job.metaFile && entry.meta != null) {
+      fs.writeFileSync(job.metaFile, JSON.stringify(entry.meta));
+    }
+  } catch {
+    try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }
+    return false;
+  }
+  record.wnd({ type: 'log', level: 1, message: 'served from render cache' });
+  void finishSuccess(record);
+  return true;
 }
 
 function hostNameOf(host) {
@@ -918,6 +979,7 @@ const server = http.createServer(async (req, res) => {
         renderPoolIdle: poolSlots.filter((slot) => slot.record == null).length,
         activeRenderJobs,
         queuedRenders: renderQueue.length,
+        renderCache: RESULT_CACHE,
       });
     }
     if (req.method === 'POST' && url.pathname === '/api/upload') {
@@ -939,7 +1001,12 @@ const server = http.createServer(async (req, res) => {
       const file = path.join(UPLOAD_DIR, token + ext);
       fs.writeFileSync(file, buf);
       const uploadedAt = Date.now();
-      mapTokenPut(token, { file, name: fn, at: uploadedAt });
+      mapTokenPut(token, {
+        file,
+        name: fn,
+        at: uploadedAt,
+        hash: RESULT_CACHE ? createHash('sha256').update(buf).digest('hex') : '',
+      });
       sweepUploads();
       return sendJson(res, 200, {
         token,
