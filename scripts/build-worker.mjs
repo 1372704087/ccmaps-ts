@@ -22,6 +22,7 @@ await build({
   alias: {
     'node:fs': path.join(ROOT, 'src', 'webworker', 'fs-shim.ts'),
     'node:path': path.join(ROOT, 'src', 'webworker', 'path-shim.ts'),
+    'node:os': path.join(ROOT, 'src', 'webworker', 'os-shim.ts'),
     'node:zlib': path.join(ROOT, 'src', 'webworker', 'zlib-stub.ts'),
     'node:buffer': 'buffer',
     'ag-psd': path.join(ROOT, 'src', 'webworker', 'ag-psd-stub.ts'),
