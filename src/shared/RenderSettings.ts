@@ -89,6 +89,10 @@ export class RenderSettings {
     outDir: string;
     workerIndex: number;
     workerCount: number;
+    /** Shared control block: ready/ack sequence, band index, adler and block length. */
+    metaBuffer: SharedArrayBuffer;
+    /** Shared slot holding one compressed deflate block. */
+    dataBuffer: SharedArrayBuffer;
   } | null = null;
   /** Internal: shared progress/failure counters for a parallel band job. */
   BandJobControl: Int32Array | null = null;

@@ -575,6 +575,10 @@ export class RenderEngine {
     }
     const assigned = bands.filter((b) => b.index % job.workerCount === job.workerIndex);
     const rowBytes = sizeRect.Width * 3;
+    const meta = new Int32Array(job.metaBuffer);
+    const sharedData = new Uint8Array(job.dataBuffer);
+    let sequence = 0;
+    const maxRawSegment = 4 * 1024 * 1024;
 
     try {
       for (let i = 0; i < assigned.length; i++) {
@@ -586,16 +590,11 @@ export class RenderEngine {
         if (settings.TunnelPaths) renderer.PlotTunnels(settings.TunnelPosition);
         if (settings.MarkStartPos) renderer.DrawStartPositions();
         const surface = renderer.GetDrawingSurface();
-        // Compress this strip right away: the parent only concatenates the deflate blocks and
-        // never needs the raw pixels, which keeps the hand-off cheap.
-        const parts: Buffer[] = [];
-        let adlerA = 1;
-        let adlerB = 0;
-        let rawLength = 0;
-        const maxRaw = 4 * 1024 * 1024;
-        const rowsPerChunk = Math.max(1, Math.min(band.height, Math.floor(maxRaw / (rowBytes + 1))));
-        for (let row0 = 0; row0 < band.height; row0 += rowsPerChunk) {
-          const rows = Math.min(rowsPerChunk, band.height - row0);
+        // Compress each strip and hand it to the parent through shared memory; the parent only
+        // concatenates the deflate blocks and never copies raw pixels.
+        const rowsPerSegment = Math.max(1, Math.min(band.height, Math.floor(maxRawSegment / (rowBytes + 1))));
+        for (let row0 = 0; row0 < band.height; row0 += rowsPerSegment) {
+          const rows = Math.min(rowsPerSegment, band.height - row0);
           const raw = new Uint8Array((rowBytes + 1) * rows);
           let dst = 0;
           for (let y = 0; y < rows; y++) {
@@ -608,7 +607,8 @@ export class RenderEngine {
               src += 3;
             }
           }
-          rawLength += raw.length;
+          let adlerA = 1;
+          let adlerB = 0;
           let i = 0;
           while (i < raw.length) {
             const end = Math.min(raw.length, i + 5552);
@@ -619,17 +619,29 @@ export class RenderEngine {
             adlerA %= 65521;
             adlerB %= 65521;
           }
-          const finalChunk = band.index === bands.length - 1 && row0 + rows >= band.height;
-          parts.push(zlib.deflateRawSync(raw, {
+          const bandDone = row0 + rows >= band.height;
+          const finalBlock = bandDone && band.index === bands.length - 1;
+          const compressed = zlib.deflateRawSync(raw, {
             level: settings.PNGQuality,
-            finishFlush: finalChunk ? zlib.constants.Z_FINISH : zlib.constants.Z_SYNC_FLUSH,
-          }));
+            finishFlush: finalBlock ? zlib.constants.Z_FINISH : zlib.constants.Z_SYNC_FLUSH,
+          });
+          if (compressed.length > sharedData.length) throw new Error('parallel band slot is too small');
+          // wait until the parent has consumed the previous block
+          while (Atomics.load(meta, 1) < sequence) {
+            Atomics.wait(meta, 1, Atomics.load(meta, 1), 250);
+          }
+          sharedData.set(compressed, 0);
+          Atomics.store(meta, 2, band.index);
+          Atomics.store(meta, 3, bandDone ? 1 : 0);
+          Atomics.store(meta, 4, finalBlock ? 1 : 0);
+          Atomics.store(meta, 5, adlerA);
+          Atomics.store(meta, 6, adlerB);
+          Atomics.store(meta, 7, raw.length);
+          Atomics.store(meta, 8, compressed.length);
+          sequence++;
+          Atomics.store(meta, 0, sequence);
+          Atomics.notify(meta, 0);
         }
-        fs.writeFileSync(path.join(job.outDir, `band-${band.index}.deflate`), Buffer.concat(parts));
-        fs.writeFileSync(
-          path.join(job.outDir, `band-${band.index}.json`),
-          JSON.stringify({ a: adlerA, b: adlerB, len: rawLength }),
-        );
         renderer.ReleaseDrawingSurface();
         if (ctl) {
           Atomics.store(ctl, 2 + job.workerIndex, Math.round(((i + 1) / Math.max(1, assigned.length)) * 100));
