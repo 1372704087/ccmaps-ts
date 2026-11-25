@@ -1911,11 +1911,15 @@
                 height: Number.isFinite(metaHeight) && metaHeight > 0 ? metaHeight : undefined,
               };
             } else {
+              // the worker/CLI reports the real failure text; the numeric code alone hides
+              // render-stage errors (e.g. an aborted strip writer)
+              const failLine = evt.message ? String(evt.message).split('\n')[0].trim() : '';
               const failText = evt.timedOut
                 ? t('renderTimeout')
-                : (evt.code != null ? tf('renderFailCode', { code: evt.code }) : (evt.message || t('renderFailed')));
+                : (failLine || (evt.code != null ? tf('renderFailCode', { code: evt.code }) : t('renderFailed')));
               lastRenderResult = { ok: false, error: new Error(failText) };
-              setProgress(lastProgress, t('failCode') + evt.code + ')', () => t('failCode') + evt.code + ')');
+              setProgress(lastProgress, evt.code != null ? t('failCode') + evt.code + ')' : failText, () =>
+                evt.code != null ? t('failCode') + evt.code + ')' : failText);
               appendLog(failText, 'error');
               openLog();
               renderToast(failText, 'error');

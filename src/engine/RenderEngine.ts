@@ -454,7 +454,7 @@ export class RenderEngine {
     const budgetPixels = Math.max(1_000_000, Math.floor((memoryMb * 1024 * 1024) / 5));
     let bandHeight = settings.BandHeight > 0 ? settings.BandHeight : Math.floor(budgetPixels / fullWidth);
     bandHeight = Math.max(128, Math.min(8192, bandHeight));
-    const bandBottom = Math.min(Math.max(1, fullRect.Height), sizeRect.Bottom);
+    const bandBottom = Math.min(fullRect.Bottom, sizeRect.Bottom);
 
     if (settings.ParallelWorkers > 1) {
       logger.info(
@@ -548,7 +548,7 @@ export class RenderEngine {
       let bandHeight = settings.BandHeight > 0 ? settings.BandHeight : Math.floor(budgetPixels / fullWidth);
       bandHeight = Math.max(128, Math.min(8192, bandHeight));
       const top0 = Math.max(0, sizeRect.Top);
-      const bottom = Math.min(Math.max(1, fullRect.Height), sizeRect.Bottom);
+      const bottom = Math.min(fullRect.Bottom, sizeRect.Bottom);
       bands = [];
       for (let top = top0; top < bottom; top += bandHeight) {
         bands.push({ index: bands.length, top, height: Math.min(bandHeight, bottom - top) });
@@ -711,7 +711,7 @@ export class RenderEngine {
 
     // rows of the map that actually land on the preview; the size rect may reach past the canvas
     const bandFrom = Math.max(0, originY);
-    const bandTo = Math.min(fullHeight, originY + sizeRect.Height);
+    const bandTo = Math.min(fullRect.Bottom, originY + sizeRect.Height);
     for (let top = bandFrom; top < bandTo; top += bandHeight) {
       const h = Math.min(bandHeight, bandTo - top);
       renderer.Draw({ originY: top, height: h });
