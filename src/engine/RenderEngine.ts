@@ -2,6 +2,7 @@
 // Ties the whole pipeline together: load a .map/.mpr/.yrm file, detect the
 // engine, load the game data through the VFS, and render the map to a PNG.
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { logger } from '../shared/Log.js';
 import { EngineType, EngineResult, TheaterType } from '../shared/Enums.js';
@@ -26,6 +27,7 @@ import { Palette } from '../rendering/Palette.js';
 import { resizeRegionBox } from '../rendering/ImageUtil.js';
 import { Rand } from '../shared/Util.js';
 import { DrawingSurface, SurfaceFormat } from '../rendering/DrawingSurface.js';
+import { PngStreamWriter } from '../rendering/PngWriter.js';
 import { PsdExporter } from '../rendering/PsdExporter.js';
 
 export class RenderEngine {
@@ -162,6 +164,24 @@ export class RenderEngine {
     }
     const banded = bandHeight > 0 && bandHeight < Math.max(1, fullRect.Height) && settings.PreviewWidth > 0
       && !settings.SavePSD;
+
+    // Full-size PNGs can be streamed: draw one strip at a time and append its rows to the
+    // output file, so peak memory is a strip instead of the whole canvas. Auto only kicks in
+    // for maps that the single-canvas path would reject anyway, which keeps every previously
+    // renderable map on the pixel-identical path.
+    const streamMemoryMb = settings.RenderMemoryMb > 0
+      ? settings.RenderMemoryMb
+      : RenderEngine.defaultRenderMemoryMb();
+    const canStreamPng = !settings.SavePSD
+      && !(settings.SaveJPEG && !settings.SavePNG)
+      && settings.OutputSink == null
+      && settings.PreviewWidth === 0
+      && settings.BandHeight !== -1
+      && settings.StreamBands !== 'off';
+    const streamPng = canStreamPng && (
+      settings.StreamBands === 'on'
+      || (settings.MaxSurfacePixels > 0 && fullPixels > settings.MaxSurfacePixels)
+    );
     if (settings.SavePSD) {
       // PSD layers cannot come from banded strips, and each layer holds a full-width RGBA
       // buffer, so cap the canvas well below the flat-image path's limit.
@@ -177,7 +197,7 @@ export class RenderEngine {
     }
     // The cap protects the surface actually allocated. A banded preview only ever holds one strip,
     // so a 500x500 map that would need a 2.2 GB full canvas is fine when it is downscaled band by band.
-    if (!banded && settings.MaxSurfacePixels > 0 && fullPixels > settings.MaxSurfacePixels) {
+    if (!banded && !streamPng && settings.MaxSurfacePixels > 0 && fullPixels > settings.MaxSurfacePixels) {
       logger.fatal(
         `Map surface needs ${fullPixels} pixels, above the ${settings.MaxSurfacePixels} limit; ` +
           'set --preview-width to render a downscaled preview, or raise the limit',
@@ -218,6 +238,17 @@ export class RenderEngine {
       }
       renderer.FreeUseless();
       return EngineResult.RenderedOk;
+    }
+
+    if (streamPng) {
+      if (settings.StreamBands === 'on' && settings.MaxSurfacePixels > 0
+        && fullPixels <= settings.MaxSurfacePixels) {
+        logger.warn('Streamed strips are pixel-stable inside a strip, but a few pixels at strip boundaries '
+          + 'can differ from the single-canvas render; auto mode only streams maps the canvas path rejects.');
+      }
+      return RenderEngine.renderPngStreamed(
+        renderer, settings, mapName, resolvedName, mapFile, engine, fullRect, streamMemoryMb,
+      );
     }
 
     renderer.Draw();
@@ -351,6 +382,95 @@ export class RenderEngine {
 
   /// <summary>Longest edge of the flattened PNG written next to a layered PSD.</summary>
   static PsdPreviewMaxWidth = 2048;
+
+  /** Per-render memory budget used to size streamed strips: an eighth of RAM, 64-256 MB. */
+  static defaultRenderMemoryMb(): number {
+    try {
+      return Math.max(64, Math.min(256, Math.floor(os.totalmem() / (1024 * 1024 * 8))));
+    } catch {
+      return 256;
+    }
+  }
+
+  /** Renders a full-size PNG strip by strip, appending each strip's rows to the output file.
+   * Peak memory is one strip plus the PNG compression buffer instead of the whole canvas. */
+  private static renderPngStreamed(
+    renderer: MapRenderer,
+    settings: RenderSettings,
+    mapName: string,
+    resolvedName: string,
+    mapFile: MapFile,
+    engine: EngineType,
+    fullRect: Rectangle,
+    memoryMb: number,
+  ): EngineResult {
+    const outPath = RenderEngine.resolveOutputPath(settings, mapName);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
+    // The cutoff row that trims the local view comes out of the tile pass. Measure it once so
+    // the framing below matches what the single-canvas path computes after its full draw.
+    renderer.MeasureTileTouchState();
+    fullRect = renderer.GetFullMapSizePixels();
+    const sizeRect = RenderEngine.applyOutputFraming(renderer.GetSizePixels(settings.SizeMode), settings, fullRect);
+    if (sizeRect.Width <= 0 || sizeRect.Height <= 0) {
+      logger.error('The crop/framing left an empty output rect');
+      renderer.FreeUseless();
+      return EngineResult.Exception;
+    }
+
+    const fullWidth = Math.max(1, fullRect.Width);
+    const budgetPixels = Math.max(1_000_000, Math.floor((memoryMb * 1024 * 1024) / 5));
+    let bandHeight = settings.BandHeight > 0 ? settings.BandHeight : Math.floor(budgetPixels / fullWidth);
+    bandHeight = Math.max(128, Math.min(8192, bandHeight));
+    logger.info(
+      `Streaming ${sizeRect.Width}x${sizeRect.Height} PNG in strips of ${bandHeight}px ` +
+        `(memory budget ${memoryMb} MB)`,
+    );
+
+    const writer = new PngStreamWriter(outPath, sizeRect.Width, sizeRect.Height, 3, settings.PNGQuality);
+    const top0 = Math.max(0, sizeRect.Top);
+    const bottom = Math.min(Math.max(1, fullRect.Height), sizeRect.Bottom);
+    try {
+      for (let top = top0; top < bottom; top += bandHeight) {
+        const height = Math.min(bandHeight, bottom - top);
+        renderer.Draw({ originY: top, height });
+        if (settings.MarkIceGrowth) renderer.MarkIceGrowth();
+        if (settings.TunnelPaths) renderer.PlotTunnels(settings.TunnelPosition);
+        if (settings.MarkStartPos) renderer.DrawStartPositions();
+
+        const surface = renderer.GetDrawingSurface();
+        const firstLocal = Math.max(0, sizeRect.Top - top);
+        const lastLocal = Math.min(height, sizeRect.Bottom - top);
+        if (lastLocal > firstLocal) {
+          writer.writeRows(surface.data, surface.Width, sizeRect.Left, firstLocal, lastLocal - firstLocal);
+        }
+        renderer.ReleaseDrawingSurface();
+      }
+      writer.finish();
+    } catch (e) {
+      writer.abort();
+      renderer.FreeUseless();
+      throw e;
+    }
+    logger.info(`Saved ${outPath}`);
+    renderer.Progress?.Report(100, 'done');
+
+    const mapStats = settings.MetadataOutFile !== '' || settings.StatsSink != null ? renderer.ComputeStats() : null;
+    if (mapStats != null && settings.StatsSink != null) settings.StatsSink(mapStats);
+    if (settings.MetadataOutFile !== '')
+      RenderEngine.writeMetadataJson(
+        settings.MetadataOutFile,
+        resolvedName,
+        mapFile,
+        renderer,
+        sizeRect,
+        new Rectangle(0, 0, sizeRect.Width, sizeRect.Height),
+        mapStats,
+        engine,
+      );
+    renderer.FreeUseless();
+    return EngineResult.RenderedOk;
+  }
 
   /// <summary>Draws the map in horizontal strips and downscales each strip straight into the
   /// preview image, so the peak canvas is one strip instead of the whole map.</summary>

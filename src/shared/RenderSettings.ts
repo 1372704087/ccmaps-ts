@@ -77,6 +77,11 @@ export class RenderSettings {
   PixelHashFile = '';
   /** Upper bound for layered PSD export (0 = the engine's 32M-pixel default). */
   PsdMaxPixels = 0;
+  /** Full-size PNG output: stream bands straight to disk instead of holding the whole canvas.
+   * 'auto' picks streaming when the full canvas would exceed the memory budget. */
+  StreamBands: 'auto' | 'on' | 'off' = 'auto';
+  /** Per-render memory budget in MB for banded/streamed output (0 = auto from total RAM). */
+  RenderMemoryMb = 0;
 
   /// <summary>The game's own multiplayer colour order: start position N carries colour N.
   /// Read off captures whose spawn pinned one player per start position.</summary>
@@ -195,6 +200,13 @@ export class RenderSettings {
     registerValue(['--band-height'], 'Draw the map in strips of this many pixels and downscale each strip into the preview (0 = strip only when the full canvas exceeds the budget, -1 = never strip)', (v) => {
       const n = parseInt(v, 10);
       this.BandHeight = Number.isFinite(n) ? Math.max(-1, n) : 0;
+    });
+    registerValue(['--stream-bands'], 'Full-size PNG output: auto = stream strips to disk when the canvas path would reject the map, on = always stream (strip boundaries can differ from a full render), off = never', (v) => {
+      this.StreamBands = v === 'on' ? 'on' : v === 'off' ? 'off' : 'auto';
+    });
+    registerValue(['--render-memory-mb'], 'Memory budget in MB for banded/streamed rendering (0 = derive from total RAM)', (v) => {
+      const n = parseInt(v, 10);
+      this.RenderMemoryMb = Number.isFinite(n) ? Math.max(0, n) : 0;
     });
     registerValue(['--crop'], 'Crop output before scaling: x,y,width,height as percentages of the selected size rect (e.g. 10,10,80,80)', (v) => {
       const parts = v.split(',').map((x) => parseFloat(x));

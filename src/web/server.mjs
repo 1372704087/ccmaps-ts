@@ -337,6 +337,11 @@ function buildArgs(p) {
   // uploaded in server mode; browser-local rendering handles those.
   for (const d of GAME_DIRS) args.push('--mixdir=' + d);
   if (MAX_SURFACE_PIXELS > 0) args.push('--max-surface-pixels=' + MAX_SURFACE_PIXELS);
+  // Optional streaming overrides: auto (default) streams only maps the canvas path rejects.
+  const streamBands = String(process.env.CNCMAPS_STREAM_BANDS || '').toLowerCase();
+  if (streamBands === 'auto' || streamBands === 'on' || streamBands === 'off') args.push('--stream-bands=' + streamBands);
+  const renderMemoryMb = clampInt(process.env.CNCMAPS_RENDER_MEMORY_MB, 0, 65536, 0);
+  if (renderMemoryMb > 0) args.push('--render-memory-mb=' + renderMemoryMb);
 
   const fmt = p.format === 'psd' ? 'psd' : (p.format === 'jpg' ? 'jpg' : 'png');
   args.push(fmt === 'jpg' ? '--output-jpg' : (fmt === 'psd' ? '--output-psd' : '--output-png'));
