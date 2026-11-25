@@ -869,33 +869,36 @@ export class MapRenderer {
   MarkIceGrowth(): void {
     logger.info('Marking ice growth cells');
     this._drawingSurface.setCategory(LayerCategory.Terrain);
-    for (const tile of [...this._tiles]) {
+    const surface = this._drawingSurface;
+    const tileWidth = this._config.TileWidth;
+    const tileHeight = this._config.TileHeight;
+    const vert = this.FullSize.Height * 2 > this.FullSize.Width;
+    const radius = vert
+      ? Math.trunc(Math.trunc((this.FullSize.Height * tileHeight) / 2) / 144 / 3)
+      : Math.trunc(Math.trunc((this.FullSize.Width * tileWidth) / 2) / 133 / 3);
+    const halfRadius = Math.trunc(radius / 2);
+    const track = surface.trackingCategories;
+    for (const tile of this._tiles) {
       if (tile == null) continue;
       const t = this._mapFile.Tiles.getTileR(tile.Rx, tile.Ry);
+      if (t == null || t.IceGrowth <= 0) continue;
 
-      if (t != null && t.IceGrowth > 0) {
-        const destX = Math.trunc((tile.Dx * this._config.TileWidth) / 2);
-        const destY = Math.trunc(((tile.Dy - tile.Z) * this._config.TileHeight) / 2);
-        const vert = this.FullSize.Height * 2 > this.FullSize.Width;
+      // banded surfaces hold one strip: keep the cell's spacing but move it into surface rows
+      const destX = Math.trunc((tile.Dx * tileWidth) / 2) - surface.OriginX;
+      const destY = Math.trunc(((tile.Dy - tile.Z) * tileHeight) / 2) - surface.OriginY;
+      if (destY + radius < 0 || destY - radius >= surface.Height) continue;
 
-        let radius: number;
-        if (vert) radius = Math.trunc(Math.trunc((this.FullSize.Height * this._config.TileHeight) / 2) / 144 / 3);
-        else radius = Math.trunc(Math.trunc((this.FullSize.Width * this._config.TileWidth) / 2) / 133 / 3);
-
-        const h = radius;
-        const w = radius;
-        const yStart = Math.max(0, destY - Math.trunc(h / 2));
-        const yEnd = Math.min(this._drawingSurface.Height, destY + h);
-        const xStart = Math.max(0, destX - Math.trunc(w / 2));
-        const xEnd = Math.min(this._drawingSurface.Width, destX + w);
-        for (let drawY = yStart; drawY < yEnd; drawY++) {
-          for (let drawX = xStart; drawX < xEnd; drawX++) {
-            const idx = (drawY * this._drawingSurface.Width + drawX) * 3;
-            this._drawingSurface.data[idx] = 0x88;
-            this._drawingSurface.data[idx + 1] = 0xff;
-            this._drawingSurface.data[idx + 2] = 0x00;
-            this._drawingSurface.markCategory(drawY * this._drawingSurface.Width + drawX);
-          }
+      const yStart = Math.max(0, destY - halfRadius);
+      const yEnd = Math.min(surface.Height, destY + radius);
+      const xStart = Math.max(0, destX - halfRadius);
+      const xEnd = Math.min(surface.Width, destX + radius);
+      for (let drawY = yStart; drawY < yEnd; drawY++) {
+        let idx = (drawY * surface.Width + xStart) * 3;
+        for (let drawX = xStart; drawX < xEnd; drawX++, idx += 3) {
+          surface.data[idx] = 0x88;
+          surface.data[idx + 1] = 0xff;
+          surface.data[idx + 2] = 0x00;
+          if (track) surface.markCategory(drawY * surface.Width + drawX);
         }
       }
     }
@@ -1268,9 +1271,24 @@ export class MapRenderer {
           ? 0.3
           : 0.15;
       const opacity = Math.max(0, 12 - o.OverlayValue) / 11.0 * 0.5 + opacityBase;
-      if (o.Tile != null && o.Tile.Palette != null) o.Tile.Palette = Palette.merge(o.Tile.Palette, markerPalettes.get(ovlType)!, opacity);
-      if (o.Palette != null) o.Palette = Palette.merge(o.Palette, markerPalettes.get(ovlType)!, opacity);
+      if (o.Tile != null && o.Tile.Palette != null) {
+        const original = o.Tile.Palette;
+        o.Tile.Palette = Palette.merge(original, markerPalettes.get(ovlType)!, opacity);
+        this._orePaletteRestores.push(() => { o.Tile!.Palette = original; });
+      }
+      if (o.Palette != null) {
+        const original = o.Palette;
+        o.Palette = Palette.merge(original, markerPalettes.get(ovlType)!, opacity);
+        this._orePaletteRestores.push(() => { o.Palette = original; });
+      }
     }
+  }
+
+  /** Undoes the temporary ore/gem palette merge so the next band or render starts from the
+   * original colours instead of merging the marker on top of an already marked palette. */
+  RestoreOrePalettes(): void {
+    for (const restore of this._orePaletteRestores) restore();
+    this._orePaletteRestores.length = 0;
   }
 
   RedrawOreAndGems(): void {
@@ -1316,11 +1334,26 @@ export class MapRenderer {
     const bandHeight = band != null ? Math.max(1, Math.min(band.height, fullHeight - originY)) : fullHeight;
     // A band surface holds one horizontal strip of the map: at 500x500 cells the full canvas is
     // 29760x14805 (2.2 GB of pixels + z), which no longer fits a normal render budget
-    this._drawingSurface = new DrawingSurface(fullWidth, bandHeight, SurfaceFormat.Bgr24, 0, originY);
-    this._drawingSurface.TrackVoxelMask = this.TrackVoxelMask;
-    this._drawingSurface.TrackCategories = this.TrackCategories;
-    this._drawingSurface.getCategories();
-    this._drawingSurface.setCategory(LayerCategory.Terrain);
+    const reusable = this._bandSurface != null
+      && this._bandSurface.Width === fullWidth
+      && this._bandSurface.Height === bandHeight
+      && !this.TrackCategories && !this.TrackVoxelMask;
+    let surface: DrawingSurface;
+    if (reusable) {
+      // Same strip size as the previous band: clear and re-aim instead of allocating 5 B/px again.
+      surface = this._bandSurface!;
+      surface.OriginX = 0;
+      surface.OriginY = originY;
+      surface.reset();
+    } else {
+      surface = new DrawingSurface(fullWidth, bandHeight, SurfaceFormat.Bgr24, 0, originY);
+      this._bandSurface = !this.TrackCategories && !this.TrackVoxelMask ? surface : null;
+    }
+    this._drawingSurface = surface;
+    surface.TrackVoxelMask = this.TrackVoxelMask;
+    surface.TrackCategories = this.TrackCategories;
+    surface.getCategories();
+    surface.setCategory(LayerCategory.Terrain);
     this._bandOriginY = originY;
     this._bandHeight = bandHeight;
 
@@ -1434,6 +1467,7 @@ export class MapRenderer {
       this._drawingSurface.setCategory(LayerCategory.Overlay);
       this.MarkOreAndGems();
       this.RedrawOreAndGems();
+      this.RestoreOrePalettes();
     }
     logger.info('Map drawing completed');
   }
@@ -1444,6 +1478,10 @@ export class MapRenderer {
   // the band a pass is drawing into, in map render rows; anchorY is where a tile's diamond sits
   private _bandOriginY = 0;
   private _bandHeight = 0;
+  /** Strip surface kept between bands so a banded render does not allocate 5 B/px per strip. */
+  private _bandSurface: DrawingSurface | null = null;
+  /** Palette swaps made by MarkOreAndGems, undone once the band is painted. */
+  private readonly _orePaletteRestores: (() => void)[] = [];
 
   /** Can a sprite anchored on this tile still paint inside the current band? A sprite draws
    * upward from its anchor, so a tile below the band can still reach into it. */
@@ -1760,6 +1798,7 @@ export class MapRenderer {
   }
 
   FreeUseless(): void {
+    this._bandSurface = null;
     this._countryColors.clear();
     this._namedColors.clear();
     this._lightSources.length = 0;

@@ -42,11 +42,11 @@ export class DrawingSurface {
   /// rendering draws one horizontal strip at a time so a 4.4e8-pixel map never needs its full
   /// canvas in memory; every blitter subtracts this from the coordinates it derives from the
   /// map, so the drawing code keeps working in render space and only the write index moves.</summary>
-  readonly OriginX: number;
-  readonly OriginY: number;
+  OriginX: number;
+  OriginY: number;
 
   readonly data: Uint8Array; // BGR triplets
-  readonly zBuffer: Int16Array;
+  private _zBuffer: Int16Array;
   /** Allocated only for maps that actually draw voxel shadows. */
   private _shadowBuffer: Uint8Array | null = null;
 
@@ -140,11 +140,22 @@ export class DrawingSurface {
     this.Stride = width * this.BytesPerPixel;
 
     this.data = new Uint8Array(width * height * this.BytesPerPixel);
-    this.zBuffer = new Int16Array(width * height);
+    this._zBuffer = new Int16Array(width * height);
   }
 
   pixelIndex(x: number, y: number): number {
     return x + y * this.Width;
+  }
+
+  /** Clears the surface so a banded render can reuse the same buffers for the next strip. */
+  reset(): void {
+    this.data.fill(0);
+    this._zBuffer.fill(0);
+    this._shadowBuffer?.fill(0);
+    this._voxelMask?.fill(0);
+    this._categories?.fill(0);
+    this._deferredAnims.length = 0;
+    this._deferredAlpha.length = 0;
   }
 
   isShadow(x: number, y: number): boolean {
@@ -160,7 +171,20 @@ export class DrawingSurface {
   }
 
   getZBuffer(): Int16Array {
-    return this.zBuffer;
+    return this._zBuffer;
+  }
+
+  /** Drops the buffers only the drawing passes need; called before exporting so a PSD
+   * does not keep the depth buffer alive next to its layer copies. */
+  releaseAuxBuffers(): void {
+    this._zBuffer = new Int16Array(0);
+    this._shadowBuffer = null;
+    this._voxelMask = null;
+  }
+
+  /** Releases the per-pixel category map once the exporter no longer needs it. */
+  releaseCategoryMap(): void {
+    this._categories = null;
   }
 
   /// <summary>Pixels drawn by the voxel rasteriser, or null when tracking is off. The game shades
@@ -245,6 +269,12 @@ export class DrawingSurface {
 
   setCategory(category: LayerCategory): void {
     this.CurrentCategory = category;
+  }
+
+  /** True when per-pixel category tracking is active (PSD export); lets hot loops skip
+   * the markCategory call entirely for the normal flat-image render. */
+  get trackingCategories(): boolean {
+    return this._categories != null;
   }
 
   /** Records the category on a pixel index (x + y * Width) after a blitter painted it. */

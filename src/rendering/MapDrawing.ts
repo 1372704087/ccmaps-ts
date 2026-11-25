@@ -12,12 +12,12 @@ function blendPixel(ds: DrawingSurface, x: number, y: number, r: number, g: numb
   const inv = 1.0 - a;
   const pixel = x + y * ds.Width;
   const idx = pixel * 3;
-  ds.data[idx] = Math.trunc(b * a + ds.data[idx] * inv);
-  ds.data[idx + 1] = Math.trunc(g * a + ds.data[idx + 1] * inv);
-  ds.data[idx + 2] = Math.trunc(r * a + ds.data[idx + 2] * inv);
+  ds.data[idx] = (b * a + ds.data[idx] * inv) | 0;
+  ds.data[idx + 1] = (g * a + ds.data[idx + 1] * inv) | 0;
+  ds.data[idx + 2] = (r * a + ds.data[idx + 2] * inv) | 0;
   // Start markers and tunnel lines are terrain annotations; keep them in the PSD terrain
   // layer now that object shadows no longer live there.
-  ds.markCategory(pixel);
+  if (ds.trackingCategories) ds.markCategory(pixel);
 }
 
 export function fillRect(

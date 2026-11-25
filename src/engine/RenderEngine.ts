@@ -165,7 +165,7 @@ export class RenderEngine {
     if (settings.SavePSD) {
       // PSD layers cannot come from banded strips, and each layer holds a full-width RGBA
       // buffer, so cap the canvas well below the flat-image path's limit.
-      const maxPsdPixels = 32_000_000;
+      const maxPsdPixels = settings.PsdMaxPixels > 0 ? settings.PsdMaxPixels : 32_000_000;
       if (fullPixels > maxPsdPixels || fullRect.Width > 30000 || fullRect.Height > 30000) {
         logger.fatal(
           `PSD export needs the whole map in memory (map is ${fullRect.Width}x${fullRect.Height}); ` +

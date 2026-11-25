@@ -163,20 +163,30 @@ function uploadDirBytes() {
   return total;
 }
 
-// In-memory rendered images: token -> { buffer, name, mime, at }
+// Rendered images live on disk: token -> { file, size, name, mime, at }. Keeping them out of
+// the process heap means a 100 MB PNG no longer sits in RSS until it is evicted.
 const imageCache = new Map();
 let imageCacheBytes = 0;
+function unlinkQuiet(file) {
+  try { fs.unlinkSync(file); return true; } catch { return false; }
+}
 function cacheDelete(token) {
   const old = imageCache.get(token);
-  if (old) {
-    imageCacheBytes -= old.buffer.length;
-    imageCache.delete(token);
+  if (!old) return;
+  imageCacheBytes -= old.size || 0;
+  imageCache.delete(token);
+  if (old.file && !unlinkQuiet(old.file)) {
+    // a download may still have the file open (Windows); retry once it closes
+    setTimeout(() => {
+      if (!unlinkQuiet(old.file)) return;
+      try { fs.rmdirSync(path.dirname(old.file)); } catch { /* dir not empty */ }
+    }, 60_000).unref?.();
   }
 }
 function cachePut(token, data) {
   cacheDelete(token);
   imageCache.set(token, data);
-  imageCacheBytes += data.buffer.length;
+  imageCacheBytes += data.size || 0;
   while (imageCache.size > IMAGE_MAX) {
     const oldest = imageCache.keys().next().value;
     cacheDelete(oldest);
@@ -431,7 +441,8 @@ function pumpRenderQueue() {
 }
 
 function cleanupJobDir(job) {
-  if (!job.jobDir) return;
+  // Successful results stay on disk so /image can stream them; the cache eviction deletes them.
+  if (!job.jobDir || job.keepDir) return;
   try { fs.rmSync(job.jobDir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
@@ -580,28 +591,34 @@ function streamRender(req, res, params) {
       const ok = code === 0 && fs.existsSync(job.outFile);
       if (ok) {
         try {
-          const buffer = await fs.promises.readFile(job.outFile);
+          const mainStat = await fs.promises.stat(job.outFile);
           let meta = null;
           try {
             if (job.metaFile && fs.existsSync(job.metaFile)) {
               meta = JSON.parse(await fs.promises.readFile(job.metaFile, 'utf8'));
             }
           } catch { /* metadata is optional */ }
-          cachePut(job.token, { buffer, name: job.name, mime: job.mime, at: Date.now() });
+          // Keep the result on disk and serve it with a read stream instead of
+          // holding the whole image in the server's heap.
+          cachePut(job.token, {
+            file: job.outFile, size: mainStat.size, name: job.name, mime: job.mime, at: Date.now(),
+          });
+          record.keepDir = true;
           let previewUrl = null;
           if (job.fmt === 'psd') {
             const previewFile = job.outFile.replace(/\.psd$/i, '') + '.preview.png';
             try {
               if (fs.existsSync(previewFile)) {
-                const previewBuffer = await fs.promises.readFile(previewFile);
+                const previewStat = await fs.promises.stat(previewFile);
                 const previewToken = job.token + 'p';
                 const previewName = job.name.replace(/\.psd$/i, '') + '.png';
-                cachePut(previewToken, { buffer: previewBuffer, name: previewName, mime: 'image/png', at: Date.now() });
+                cachePut(previewToken, {
+                  file: previewFile, size: previewStat.size, name: previewName, mime: 'image/png', at: Date.now(),
+                });
                 previewUrl = '/image/' + previewToken;
               }
             } catch { /* the preview is optional; the PSD download still works */ }
           }
-          cleanupJobDir(record);
           finishRenderJob(record, {
             type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name,
             previewUrl: previewUrl || undefined, meta,
@@ -705,6 +722,7 @@ const server = http.createServer(async (req, res) => {
         uploadBytes: uploadDirBytes(),
         maxUploadBytes: UPLOAD_MAX_TOTAL_BYTES,
         imageCacheBytes,
+        imageCacheFiles: imageCache.size,
         maxImageCacheBytes: IMAGE_MAX_BYTES,
         activeRenderJobs,
         queuedRenders: renderQueue.length,
@@ -755,9 +773,15 @@ const server = http.createServer(async (req, res) => {
       catch { return sendJson(res, 400, { error: 'Invalid image token' }); }
       const e = cacheGet(token);
       if (!e) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Image expired or not found'); }
+      let size = e.size;
+      try { size = fs.statSync(e.file).size; } catch {
+        cacheDelete(token);
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('Image expired or not found');
+      }
       const headers = {
         'Content-Type': e.mime,
-        'Content-Length': e.buffer.length,
+        'Content-Length': size,
         'Cache-Control': 'private, max-age=3600',
         'X-Content-Type-Options': 'nosniff',
       };
@@ -765,7 +789,9 @@ const server = http.createServer(async (req, res) => {
         headers['Content-Disposition'] = contentDisposition(e.name, e.mime);
       }
       res.writeHead(200, headers);
-      return res.end(e.buffer);
+      const stream = fs.createReadStream(e.file);
+      stream.on('error', () => { try { res.destroy(); } catch { /* client gone */ } });
+      return stream.pipe(res);
     }
     if (req.method === 'GET') return serveStatic(req, res, url.pathname);
     res.writeHead(405); res.end('Method not allowed');
@@ -807,6 +833,6 @@ server.listen(PORT, '127.0.0.1', () => {
     `  Upload dir: ${UPLOAD_DIR} (max ${UPLOAD_MAX_FILES} files, ${UPLOAD_TTL_MS / 60000} min TTL, ${UPLOAD_MAX_TOTAL_BYTES / 1024 / 1024} MB total)\n` +
     `  Max render surface: ${MAX_SURFACE_PIXELS} pixels; queue max ${RENDER_QUEUE_MAX}\n` +
     `  Render timeout: ${RENDER_TIMEOUT_MS / 60000} min\n` +
-    `  Images are served from memory (not persisted; cache ${IMAGE_MAX} items / ${IMAGE_MAX_BYTES / 1024 / 1024} MB).\n`,
+    `  Rendered images stay on disk in the scratch dir (cache ${IMAGE_MAX} items / ${IMAGE_MAX_BYTES / 1024 / 1024} MB, streamed to clients).\n`,
   );
 });

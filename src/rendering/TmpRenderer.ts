@@ -98,41 +98,83 @@ export class TmpRenderer {
     // like the game (Blit_Iso_Tile): a tile without a z-data section draws without
     // touching the z-buffer, so its pixels stay "far" and never occlude anything
     const useZ = zData != null;
+    // Pixels are written as one linear index run per tile row, so the per-pixel
+    // bounds test can collapse to one check per row when the whole row is inside.
+    const pixelHigh = ds.Width * ds.Height;
+    const plain = categories == null && layer == null && elementPart == null;
 
+    // A measuring pass only needs the touched-tile state recorded above; skipping the pixel
+    // loops makes the pre-render band survey much cheaper.
+    if (!ds.MeasureOnly) {
     for (; y < halfCy; y++) {
       cx += 4;
-      for (let c = 0; c < cx; c++) {
-        const paletteValue = img.TileData[rIdx];
-        const zBufVal = zBase - (useZ ? zData[rIdx] : 0);
-        if (paletteValue !== 0 && w >= 0 && w < wHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
-          const ci = paletteValue * 3;
-          data[w] = bgr[ci];
-          data[w + 1] = bgr[ci + 1];
-          data[w + 2] = bgr[ci + 2];
-          if (useZ) zBuffer[zIdx] = zBufVal;
-          if (categories != null) categories[zIdx] = category;
-          if (layer != null) {
-            const li = zIdx * 4;
-            layer[li] = bgr[ci + 2];
-            layer[li + 1] = bgr[ci + 1];
-            layer[li + 2] = bgr[ci];
-            layer[li + 3] = 255;
-          }
-          if (elementPart != null) {
-            const px = (zIdx % ds.Width) - ox;
-            const py = ((zIdx / ds.Width) | 0) - oy;
-            if (px >= 0 && px < elementPart.width && py >= 0 && py < elementPart.height) {
-              const pi = (py * elementPart.width + px) * 4;
-              elementPart.data[pi] = bgr[ci + 2];
-              elementPart.data[pi + 1] = bgr[ci + 1];
-              elementPart.data[pi + 2] = bgr[ci];
-              elementPart.data[pi + 3] = 255;
+      const rowStart = zIdx;
+      if (plain && rowStart >= 0 && rowStart + cx <= pixelHigh) {
+        if (useZ) {
+          for (let c = 0; c < cx; c++) {
+            const paletteValue = img.TileData[rIdx];
+            if (paletteValue !== 0) {
+              const zv = zBase - zData![rIdx];
+              const zi = rowStart + c;
+              if (zv >= zBuffer[zi]) {
+                const ci = paletteValue * 3;
+                data[w] = bgr[ci];
+                data[w + 1] = bgr[ci + 1];
+                data[w + 2] = bgr[ci + 2];
+                zBuffer[zi] = zv;
+              }
             }
+            w += 3;
+            rIdx++;
+          }
+        } else {
+          for (let c = 0; c < cx; c++) {
+            const paletteValue = img.TileData[rIdx];
+            if (paletteValue !== 0) {
+              const ci = paletteValue * 3;
+              data[w] = bgr[ci];
+              data[w + 1] = bgr[ci + 1];
+              data[w + 2] = bgr[ci + 2];
+            }
+            w += 3;
+            rIdx++;
           }
         }
-        w += 3;
-        zIdx++;
-        rIdx++;
+        zIdx = rowStart + cx;
+      } else {
+        for (let c = 0; c < cx; c++) {
+          const paletteValue = img.TileData[rIdx];
+          const zBufVal = zBase - (useZ ? zData![rIdx] : 0);
+          if (paletteValue !== 0 && zIdx >= 0 && zIdx < pixelHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
+            const ci = paletteValue * 3;
+            data[w] = bgr[ci];
+            data[w + 1] = bgr[ci + 1];
+            data[w + 2] = bgr[ci + 2];
+            if (useZ) zBuffer[zIdx] = zBufVal;
+            if (categories != null) categories[zIdx] = category;
+            if (layer != null) {
+              const li = zIdx * 4;
+              layer[li] = bgr[ci + 2];
+              layer[li + 1] = bgr[ci + 1];
+              layer[li + 2] = bgr[ci];
+              layer[li + 3] = 255;
+            }
+            if (elementPart != null) {
+              const px = (zIdx % ds.Width) - ox;
+              const py = ((zIdx / ds.Width) | 0) - oy;
+              if (px >= 0 && px < elementPart.width && py >= 0 && py < elementPart.height) {
+                const pi = (py * elementPart.width + px) * 4;
+                elementPart.data[pi] = bgr[ci + 2];
+                elementPart.data[pi + 1] = bgr[ci + 1];
+                elementPart.data[pi + 2] = bgr[ci];
+                elementPart.data[pi + 3] = 255;
+              }
+            }
+          }
+          w += 3;
+          zIdx++;
+          rIdx++;
+        }
       }
       w += stride - 3 * (cx + 2);
       zIdx += ds.Width - (cx + 2);
@@ -142,41 +184,77 @@ export class TmpRenderer {
     zIdx += 4;
     for (; y < tmp.BlockHeight; y++) {
       cx -= 4;
-      for (let c = 0; c < cx; c++) {
-        const paletteValue = img.TileData[rIdx];
-        const zBufVal = zBase - (useZ ? zData[rIdx] : 0);
-        if (paletteValue !== 0 && w >= 0 && w < wHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
-          const ci = paletteValue * 3;
-          data[w] = bgr[ci];
-          data[w + 1] = bgr[ci + 1];
-          data[w + 2] = bgr[ci + 2];
-          if (useZ) zBuffer[zIdx] = zBufVal;
-          if (categories != null) categories[zIdx] = category;
-          if (layer != null) {
-            const li = zIdx * 4;
-            layer[li] = bgr[ci + 2];
-            layer[li + 1] = bgr[ci + 1];
-            layer[li + 2] = bgr[ci];
-            layer[li + 3] = 255;
-          }
-          if (elementPart != null) {
-            const px = (zIdx % ds.Width) - ox;
-            const py = ((zIdx / ds.Width) | 0) - oy;
-            if (px >= 0 && px < elementPart.width && py >= 0 && py < elementPart.height) {
-              const pi = (py * elementPart.width + px) * 4;
-              elementPart.data[pi] = bgr[ci + 2];
-              elementPart.data[pi + 1] = bgr[ci + 1];
-              elementPart.data[pi + 2] = bgr[ci];
-              elementPart.data[pi + 3] = 255;
+      const rowStart = zIdx;
+      if (plain && rowStart >= 0 && rowStart + cx <= pixelHigh) {
+        if (useZ) {
+          for (let c = 0; c < cx; c++) {
+            const paletteValue = img.TileData[rIdx];
+            if (paletteValue !== 0) {
+              const zv = zBase - zData![rIdx];
+              const zi = rowStart + c;
+              if (zv >= zBuffer[zi]) {
+                const ci = paletteValue * 3;
+                data[w] = bgr[ci];
+                data[w + 1] = bgr[ci + 1];
+                data[w + 2] = bgr[ci + 2];
+                zBuffer[zi] = zv;
+              }
             }
+            w += 3;
+            rIdx++;
+          }
+        } else {
+          for (let c = 0; c < cx; c++) {
+            const paletteValue = img.TileData[rIdx];
+            if (paletteValue !== 0) {
+              const ci = paletteValue * 3;
+              data[w] = bgr[ci];
+              data[w + 1] = bgr[ci + 1];
+              data[w + 2] = bgr[ci + 2];
+            }
+            w += 3;
+            rIdx++;
           }
         }
-        w += 3;
-        zIdx++;
-        rIdx++;
+        zIdx = rowStart + cx;
+      } else {
+        for (let c = 0; c < cx; c++) {
+          const paletteValue = img.TileData[rIdx];
+          const zBufVal = zBase - (useZ ? zData![rIdx] : 0);
+          if (paletteValue !== 0 && zIdx >= 0 && zIdx < pixelHigh && (!useZ || zBufVal >= zBuffer[zIdx])) {
+            const ci = paletteValue * 3;
+            data[w] = bgr[ci];
+            data[w + 1] = bgr[ci + 1];
+            data[w + 2] = bgr[ci + 2];
+            if (useZ) zBuffer[zIdx] = zBufVal;
+            if (categories != null) categories[zIdx] = category;
+            if (layer != null) {
+              const li = zIdx * 4;
+              layer[li] = bgr[ci + 2];
+              layer[li + 1] = bgr[ci + 1];
+              layer[li + 2] = bgr[ci];
+              layer[li + 3] = 255;
+            }
+            if (elementPart != null) {
+              const px = (zIdx % ds.Width) - ox;
+              const py = ((zIdx / ds.Width) | 0) - oy;
+              if (px >= 0 && px < elementPart.width && py >= 0 && py < elementPart.height) {
+                const pi = (py * elementPart.width + px) * 4;
+                elementPart.data[pi] = bgr[ci + 2];
+                elementPart.data[pi + 1] = bgr[ci + 1];
+                elementPart.data[pi + 2] = bgr[ci];
+                elementPart.data[pi + 3] = 255;
+              }
+            }
+          }
+          w += 3;
+          zIdx++;
+          rIdx++;
+        }
       }
       w += stride - 3 * (cx - 2);
       zIdx += ds.Width - (cx - 2);
+    }
     }
 
     if (!img.hasExtraData) return; // we're done now

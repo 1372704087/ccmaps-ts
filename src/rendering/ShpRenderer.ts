@@ -191,6 +191,9 @@ export class ShpRenderer {
     const ox = offset.X - ds.OriginX;
     const oy = offset.Y - ds.OriginY;
     const elementPart = ds.beginPart(ox, oy, img.Width, img.Height);
+    // A survey pass only needs the touch/grid state recorded by the caller; the frame choice
+    // above has already consumed any random draw, so the pixel loops can be skipped.
+    if (ds.MeasureOnly) return;
     let w = ox * 3 + stride * oy;
 
     // clip to 25-50-75-100
@@ -284,6 +287,13 @@ export class ShpRenderer {
       zShapeY = drawY - this._zShapeRefY - move.Y + (fnd.Width + fnd.Height - 2) * idiv(tileHeight, 2);
     }
 
+    // The sprite rows are contiguous index runs, so a row that is fully inside the
+    // surface needs no per-pixel bounds test; depth that only depends on the row is
+    // evaluated once per row instead of once per pixel.
+    const pixelHigh = ds.Width * ds.Height;
+    const plain = categories == null && layer == null && elementPart == null;
+    const writeZ = !unitLike && !isAnim && !plainBlit;
+
     for (let y = 0; y < img.Height; y++) {
       if (oy + y < 0) {
         w += stride;
@@ -292,60 +302,116 @@ export class ShpRenderer {
         continue; // out of bounds
       }
 
-      for (let x = 0; x < img.Width; x++) {
-        const paletteValue = imgData[rIdx];
-
-        if (paletteValue !== 0) {
-          // ZAdjust uses the game's sign: positive pushes away from the screen
-          let zBufVal: number;
-          if (dr.Flat) zBufVal = zGround + zLift + (offset.Y + y) - zAnchorY - props.ZAdjust;
-          else if (zShape != null) {
-            const sample = this.sampleZShape(zShape, offset.X + x, offset.Y + y, zShapeX, zShapeY);
-            zBufVal = zGround + 2 /* BodyLift */ - props.ZAdjust + (sample > 0 ? sample + this._zShapeBias : 0);
-          } else zBufVal = zGround + standingLift + idiv(zAnchorY - (offset.Y + y), 3);
-          zBufVal = toShort(zBufVal);
-
-          // the RLE blitters draw only a strictly nearer pixel: ties keep the earlier drawing
-          const inBounds = w >= wLow && w < wHigh;
-          const ci = paletteValue * 3;
-          if (inBounds && (plainBlit || zBufVal > zBuffer[zIdx])) {
-            if (transLucency !== 0) {
-              data[w] = Math.trunc(a * data[w] + blendB * bgr[ci]);
-              data[w + 1] = Math.trunc(a * data[w + 1] + blendB * bgr[ci + 1]);
-              data[w + 2] = Math.trunc(a * data[w + 2] + blendB * bgr[ci + 2]);
-            } else {
-              data[w] = bgr[ci];
-              data[w + 1] = bgr[ci + 1];
-              data[w + 2] = bgr[ci + 2];
+      const rowStart = zIdx;
+      if (plain && rowStart >= 0 && rowStart + img.Width <= pixelHigh) {
+        if (zShape == null) {
+          const rowZ = toShort(
+            dr.Flat
+              ? zGround + zLift + (offset.Y + y) - zAnchorY - props.ZAdjust
+              : zGround + standingLift + idiv(zAnchorY - (offset.Y + y), 3),
+          );
+          for (let x = 0; x < img.Width; x++) {
+            const paletteValue = imgData[rIdx];
+            if (paletteValue !== 0) {
+              const zi = rowStart + x;
+              // the RLE blitters draw only a strictly nearer pixel: ties keep the earlier drawing
+              if (plainBlit || rowZ > zBuffer[zi]) {
+                const ci = paletteValue * 3;
+                if (transLucency !== 0) {
+                  data[w] = Math.trunc(a * data[w] + blendB * bgr[ci]);
+                  data[w + 1] = Math.trunc(a * data[w + 1] + blendB * bgr[ci + 1]);
+                  data[w + 2] = Math.trunc(a * data[w + 2] + blendB * bgr[ci + 2]);
+                } else {
+                  data[w] = bgr[ci];
+                  data[w + 1] = bgr[ci + 1];
+                  data[w + 2] = bgr[ci + 2];
+                }
+                if (writeZ) zBuffer[zi] = rowZ;
+              }
             }
-            if (!unitLike) {
-              if (!isAnim && !plainBlit) zBuffer[zIdx] = zBufVal;
+            rIdx++;
+            w += 3;
+          }
+        } else {
+          for (let x = 0; x < img.Width; x++) {
+            const paletteValue = imgData[rIdx];
+            if (paletteValue !== 0) {
+              const sample = this.sampleZShape(zShape, offset.X + x, offset.Y + y, zShapeX, zShapeY);
+              const zBufVal = toShort(zGround + 2 /* BodyLift */ - props.ZAdjust + (sample > 0 ? sample + this._zShapeBias : 0));
+              const zi = rowStart + x;
+              if (plainBlit || zBufVal > zBuffer[zi]) {
+                const ci = paletteValue * 3;
+                if (transLucency !== 0) {
+                  data[w] = Math.trunc(a * data[w] + blendB * bgr[ci]);
+                  data[w + 1] = Math.trunc(a * data[w + 1] + blendB * bgr[ci + 1]);
+                  data[w + 2] = Math.trunc(a * data[w + 2] + blendB * bgr[ci + 2]);
+                } else {
+                  data[w] = bgr[ci];
+                  data[w + 1] = bgr[ci + 1];
+                  data[w + 2] = bgr[ci + 2];
+                }
+                if (writeZ) zBuffer[zi] = zBufVal;
+              }
             }
-            if (categories != null) categories[zIdx] = category;
-            // The layer keeps the art the game actually drew. Pixels that lost the z-test were
-            // never painted, and keeping them would put a later-drawn (but occluded) sprite
-            // above the one the game shows.
-            if (layer != null) {
-              const li = zIdx * 4;
-              layer[li] = bgr[ci + 2];
-              layer[li + 1] = bgr[ci + 1];
-              layer[li + 2] = bgr[ci];
-              layer[li + 3] = 255;
-            }
-            if (elementPart != null) {
-              const pi = (y * img.Width + x) * 4;
-              elementPart.data[pi] = bgr[ci + 2];
-              elementPart.data[pi + 1] = bgr[ci + 1];
-              elementPart.data[pi + 2] = bgr[ci];
-              elementPart.data[pi + 3] = 255;
-            }
+            rIdx++;
+            w += 3;
           }
         }
+        zIdx = rowStart + img.Width;
+      } else {
+        for (let x = 0; x < img.Width; x++) {
+          const paletteValue = imgData[rIdx];
 
-        // Up to the next pixel
-        rIdx++;
-        zIdx++;
-        w += 3;
+          if (paletteValue !== 0) {
+            // ZAdjust uses the game's sign: positive pushes away from the screen
+            let zBufVal: number;
+            if (dr.Flat) zBufVal = zGround + zLift + (offset.Y + y) - zAnchorY - props.ZAdjust;
+            else if (zShape != null) {
+              const sample = this.sampleZShape(zShape, offset.X + x, offset.Y + y, zShapeX, zShapeY);
+              zBufVal = zGround + 2 /* BodyLift */ - props.ZAdjust + (sample > 0 ? sample + this._zShapeBias : 0);
+            } else zBufVal = zGround + standingLift + idiv(zAnchorY - (offset.Y + y), 3);
+            zBufVal = toShort(zBufVal);
+
+            // the RLE blitters draw only a strictly nearer pixel: ties keep the earlier drawing
+            const inBounds = w >= wLow && w < wHigh;
+            const ci = paletteValue * 3;
+            if (inBounds && (plainBlit || zBufVal > zBuffer[zIdx])) {
+              if (transLucency !== 0) {
+                data[w] = Math.trunc(a * data[w] + blendB * bgr[ci]);
+                data[w + 1] = Math.trunc(a * data[w + 1] + blendB * bgr[ci + 1]);
+                data[w + 2] = Math.trunc(a * data[w + 2] + blendB * bgr[ci + 2]);
+              } else {
+                data[w] = bgr[ci];
+                data[w + 1] = bgr[ci + 1];
+                data[w + 2] = bgr[ci + 2];
+              }
+              if (writeZ) zBuffer[zIdx] = zBufVal;
+              if (categories != null) categories[zIdx] = category;
+              // The layer keeps the art the game actually drew. Pixels that lost the z-test were
+              // never painted, and keeping them would put a later-drawn (but occluded) sprite
+              // above the one the game shows.
+              if (layer != null) {
+                const li = zIdx * 4;
+                layer[li] = bgr[ci + 2];
+                layer[li + 1] = bgr[ci + 1];
+                layer[li + 2] = bgr[ci];
+                layer[li + 3] = 255;
+              }
+              if (elementPart != null) {
+                const pi = (y * img.Width + x) * 4;
+                elementPart.data[pi] = bgr[ci + 2];
+                elementPart.data[pi + 1] = bgr[ci + 1];
+                elementPart.data[pi + 2] = bgr[ci];
+                elementPart.data[pi + 3] = 255;
+              }
+            }
+          }
+
+          // Up to the next pixel
+          rIdx++;
+          zIdx++;
+          w += 3;
+        }
       }
       w += stride - 3 * img.Width;
       zIdx += ds.Width - img.Width;

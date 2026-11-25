@@ -18,6 +18,8 @@ export class PsdExporter {
   static save(path: string, surface: DrawingSurface, rect: Rectangle): void {
     const categories = surface.getCategories();
     if (categories == null) throw new Error('PSD export requires category tracking');
+    // The depth/aux buffers are drawing-only; free them before the layer copies are built.
+    surface.releaseAuxBuffers();
 
     const width = rect.Width;
     const height = rect.Height;
@@ -29,7 +31,7 @@ export class PsdExporter {
     // Terrain stays one merged layer: the category buffer already holds every tile pixel,
     // and effects that paint without claiming a category (start markers, shadows) fall back
     // to the pixel's final owner.
-    const terrainPixels = surface.takeCategoryLayer(LayerCategory.Terrain);
+    let terrainPixels = surface.takeCategoryLayer(LayerCategory.Terrain);
     let terrainLeft = Number.POSITIVE_INFINITY;
     let terrainTop = Number.POSITIVE_INFINITY;
     let terrainRight = -1;
@@ -187,6 +189,9 @@ export class PsdExporter {
             imageData: { width: w, height: h, data },
           }],
         });
+        // the merged layer owns its own copy now
+        terrainPixels = null;
+        surface.releaseCategoryMap();
         continue;
       }
 
@@ -195,6 +200,8 @@ export class PsdExporter {
       const layers: Layer[] = [];
       for (const element of list) {
         const layer = buildElementLayer(element);
+        // the layer holds its own cropped copy; release the collected sprite patches
+        element.parts.length = 0;
         if (layer != null) layers.push(layer);
       }
       if (!layers.length) continue;

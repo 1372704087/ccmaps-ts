@@ -18,6 +18,8 @@ const hasNativeCrc = typeof nativeCrc32 === 'function';
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 /** Rows per compression chunk; the raw buffer stays a few MiB even for huge maps. */
 const MAX_RAW_CHUNK = 4 * 1024 * 1024;
+/** zlib's NMAX: the largest run that fits an adler accumulator without overflowing. */
+const ADLER_NMAX = 5552;
 
 function buildCrcTable(): Uint32Array {
   const table = new Uint32Array(256);
@@ -41,6 +43,164 @@ function writeBEU32(data: Uint8Array, offset: number, v: number): void {
   data[offset + 3] = v & 0xff;
 }
 
+function crcOfChunk(type: Buffer, payload: Buffer): number {
+  return hasNativeCrc
+    ? (nativeCrc32!(payload, nativeCrc32!(type)) >>> 0)
+    : ((updateCrc(0xffffffff, Buffer.concat([type, payload])) ^ 0xffffffff) >>> 0);
+}
+
+/** Writes one PNG chunk with writev so the compressed payload is never copied. */
+function writeChunk(fd: number, type: Buffer, payload: Buffer): void {
+  const len = Buffer.allocUnsafe(4);
+  writeBEU32(len, 0, payload.length);
+  const crc = Buffer.allocUnsafe(4);
+  writeBEU32(crc, 0, crcOfChunk(type, payload));
+  fs.writevSync(fd, [len, type, payload, crc]);
+}
+
+const CHUNK_IHDR = Buffer.from('IHDR', 'ascii');
+const CHUNK_IDAT = Buffer.from('IDAT', 'ascii');
+const CHUNK_IEND = Buffer.from('IEND', 'ascii');
+
+/**
+ * Incremental PNG writer: rows are handed over as they finish rendering and are
+ * compressed in bounded chunks, so a banded/streamed render never needs the
+ * whole image in memory. The output is a single ordinary PNG.
+ */
+export class PngStreamWriter {
+  private readonly fd: number;
+  private readonly width: number;
+  private readonly height: number;
+  private readonly bytesPerPixel: number;
+  private readonly level: number;
+  private readonly rowBytes: number;
+  private readonly rowsPerChunk: number;
+  private readonly raw: Uint8Array;
+  private rawFill = 0;
+  private rowsInChunk = 0;
+  private adlerA = 1;
+  private adlerB = 0;
+  private firstChunk = true;
+  private rowsWritten = 0;
+  private finished = false;
+
+  constructor(path: string, width: number, height: number, bytesPerPixel: number, compressionLevel: number) {
+    if (width <= 0 || height <= 0) throw new Error('Cannot write an empty PNG');
+    const level = Number.isFinite(compressionLevel)
+      ? Math.min(9, Math.max(0, Math.trunc(compressionLevel)))
+      : 4;
+    this.fd = fs.openSync(path, 'w');
+    this.width = width;
+    this.height = height;
+    this.bytesPerPixel = bytesPerPixel;
+    this.level = level;
+    this.rowBytes = width * 3;
+    this.rowsPerChunk = Math.max(1, Math.min(height, Math.floor(MAX_RAW_CHUNK / (this.rowBytes + 1))));
+    this.raw = new Uint8Array((this.rowBytes + 1) * this.rowsPerChunk);
+
+    fs.writeSync(this.fd, PNG_SIGNATURE);
+    const ihdr = Buffer.alloc(13);
+    writeBEU32(ihdr, 0, width);
+    writeBEU32(ihdr, 4, height);
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 2; // color type: truecolor
+    writeChunk(this.fd, CHUNK_IHDR, ihdr);
+  }
+
+  /** Appends `rows` output rows taken from `src` starting at `srcFirstRow`, cropping
+   * horizontally at `left` for `width` pixels. Rows must be supplied top to bottom. */
+  writeRows(src: Uint8Array, srcWidth: number, left: number, srcFirstRow: number, rows: number): void {
+    if (this.finished) throw new Error('PNG stream already finished');
+    let remaining = rows;
+    let firstRow = srcFirstRow;
+    while (remaining > 0) {
+      const take = Math.min(this.rowsPerChunk - this.rowsInChunk, remaining, this.height - this.rowsWritten);
+      if (take <= 0) throw new Error('PNG stream received more rows than its height');
+      for (let y = 0; y < take; y++) {
+        let dst = this.rawFill;
+        this.raw[dst++] = 0; // filter: None
+        let srcIdx = ((firstRow + y) * srcWidth + left) * this.bytesPerPixel;
+        if (this.bytesPerPixel === 3) {
+          for (let x = 0; x < this.width; x++) {
+            this.raw[dst] = src[srcIdx + 2]; // r
+            this.raw[dst + 1] = src[srcIdx + 1]; // g
+            this.raw[dst + 2] = src[srcIdx]; // b
+            dst += 3;
+            srcIdx += 3;
+          }
+        } else {
+          for (let x = 0; x < this.width; x++) {
+            this.raw[dst] = src[srcIdx + 2];
+            this.raw[dst + 1] = src[srcIdx + 1];
+            this.raw[dst + 2] = src[srcIdx];
+            dst += 3;
+            srcIdx += this.bytesPerPixel;
+          }
+        }
+        this.rawFill = dst;
+      }
+      this.rowsInChunk += take;
+      this.rowsWritten += take;
+      remaining -= take;
+      firstRow += take;
+      if (this.rowsInChunk === this.rowsPerChunk) this.flushChunk(this.rowsWritten === this.height);
+    }
+  }
+
+  finish(): void {
+    if (this.finished) return;
+    if (this.rowsWritten !== this.height) {
+      throw new Error(`PNG stream ended after ${this.rowsWritten} of ${this.height} rows`);
+    }
+    if (this.rowsInChunk > 0) this.flushChunk(true);
+    const adler = Buffer.allocUnsafe(4);
+    writeBEU32(adler, 0, (((this.adlerB << 16) | this.adlerA) >>> 0));
+    writeChunk(this.fd, CHUNK_IDAT, adler);
+    writeChunk(this.fd, CHUNK_IEND, Buffer.alloc(0));
+    fs.closeSync(this.fd);
+    this.finished = true;
+  }
+
+  /** Closes the file without a valid trailer; used when a render is cancelled. */
+  abort(): void {
+    if (this.finished) return;
+    this.finished = true;
+    try { fs.closeSync(this.fd); } catch { /* ignore */ }
+  }
+
+  private flushChunk(last: boolean): void {
+    const filled = this.rawFill;
+    let a = this.adlerA;
+    let b = this.adlerB;
+    let i = 0;
+    while (i < filled) {
+      const end = Math.min(filled, i + ADLER_NMAX);
+      for (; i < end; i++) {
+        a += this.raw[i];
+        b += a;
+      }
+      a %= 65521;
+      b %= 65521;
+    }
+    this.adlerA = a;
+    this.adlerB = b;
+
+    const compressed = zlib.deflateRawSync(this.raw.subarray(0, filled), {
+      level: this.level,
+      finishFlush: last ? zlib.constants.Z_FINISH : zlib.constants.Z_SYNC_FLUSH,
+    });
+    if (this.firstChunk) {
+      const header = Buffer.from([0x78, this.level === 0 ? 0x01 : 0x9c]);
+      writeChunk(this.fd, CHUNK_IDAT, Buffer.concat([header, compressed]));
+      this.firstChunk = false;
+    } else {
+      writeChunk(this.fd, CHUNK_IDAT, compressed);
+    }
+    this.rawFill = 0;
+    this.rowsInChunk = 0;
+  }
+}
+
 export class PngWriter {
   static save(
     path: string,
@@ -50,86 +210,19 @@ export class PngWriter {
     rect: Rectangle,
     compressionLevel: number,
   ): void {
-    // API callers can bypass the CLI parser; zlib throws RangeError outside 0..9.
-    const level = Number.isFinite(compressionLevel)
-      ? Math.min(9, Math.max(0, Math.trunc(compressionLevel)))
-      : 4;
-    const fd = fs.openSync(path, 'w');
+    const writer = new PngStreamWriter(path, rect.Width, rect.Height, bytesPerPixel, compressionLevel);
     try {
-      fs.writeSync(fd, PNG_SIGNATURE);
-
-      const ihdr = Buffer.alloc(13);
-      writeBEU32(ihdr, 0, rect.Width);
-      writeBEU32(ihdr, 4, rect.Height);
-      ihdr[8] = 8; // bit depth
-      ihdr[9] = 2; // color type: truecolor
-      fs.writeSync(fd, PngWriter.chunk('IHDR', ihdr));
-
-      // One zlib stream split over multiple IDAT chunks: the header goes in the
-      // first block, the Adler-32 trailer in the last one.
-      const zlibHeader = Buffer.from([0x78, level === 0 ? 0x01 : 0x9c]);
-      const rowBytes = rect.Width * 3;
-      const rowsPerChunk = Math.max(1, Math.min(rect.Height, Math.floor(MAX_RAW_CHUNK / (rowBytes + 1))));
-      let adlerA = 1;
-      let adlerB = 0;
-      let first = true;
-
-      for (let top = 0; top < rect.Height; top += rowsPerChunk) {
-        const rows = Math.min(rowsPerChunk, rect.Height - top);
-        const raw = new Uint8Array((rowBytes + 1) * rows);
-        let rawIdx = 0;
-        for (let y = 0; y < rows; y++) {
-          const rowStart = rawIdx;
-          raw[rawIdx++] = 0; // filter: None
-          let srcIdx = ((rect.Top + top + y) * surfaceWidth + rect.Left) * bytesPerPixel;
-          for (let x = 0; x < rect.Width; x++) {
-            raw[rawIdx++] = data[srcIdx + 2]; // r
-            raw[rawIdx++] = data[srcIdx + 1]; // g
-            raw[rawIdx++] = data[srcIdx + 0]; // b
-            srcIdx += bytesPerPixel;
-          }
-          for (let i = rowStart; i < rawIdx; i++) {
-            adlerA += raw[i];
-            adlerB += adlerA;
-            if ((i & 0x3ff) === 0x3ff) {
-              adlerA %= 65521;
-              adlerB %= 65521;
-            }
-          }
-        }
-        adlerA %= 65521;
-        adlerB %= 65521;
-
-        const last = top + rows >= rect.Height;
-        const compressed = zlib.deflateRawSync(raw, {
-          level,
-          finishFlush: last ? zlib.constants.Z_FINISH : zlib.constants.Z_SYNC_FLUSH,
-        });
-        const payload = first ? Buffer.concat([zlibHeader, compressed]) : compressed;
-        fs.writeSync(fd, PngWriter.chunk('IDAT', payload));
-        first = false;
+      // Feed the surface one compression chunk's worth of rows at a time so the
+      // crop/stride walk happens over the same bounded row count.
+      const rowsPerBatch = Math.max(1, Math.min(rect.Height, Math.floor(MAX_RAW_CHUNK / (rect.Width * 3 + 1))));
+      for (let top = 0; top < rect.Height; top += rowsPerBatch) {
+        const rows = Math.min(rowsPerBatch, rect.Height - top);
+        writer.writeRows(data, surfaceWidth, rect.Left, rect.Top + top, rows);
       }
-
-      const adler = Buffer.alloc(4);
-      writeBEU32(adler, 0, (((adlerB << 16) | adlerA) >>> 0));
-      fs.writeSync(fd, PngWriter.chunk('IDAT', adler));
-      fs.writeSync(fd, PngWriter.chunk('IEND', Buffer.alloc(0)));
-    } finally {
-      fs.closeSync(fd);
+      writer.finish();
+    } catch (e) {
+      writer.abort();
+      throw e;
     }
-  }
-
-  private static chunk(type: string, payload: Buffer): Buffer {
-    const t = Buffer.from(type, 'ascii');
-    const len = Buffer.alloc(4);
-    writeBEU32(len, 0, payload.length);
-    // CRC over type+payload without copying the payload: zlib.crc32 accepts the
-    // previous checksum, so crc(type+payload) = crc(payload, crc(type)).
-    const crc = hasNativeCrc
-      ? (nativeCrc32!(payload, nativeCrc32!(t)) >>> 0)
-      : (updateCrc(0xffffffff, Buffer.concat([t, payload])) ^ 0xffffffff);
-    const crcBuf = Buffer.alloc(4);
-    writeBEU32(crcBuf, 0, crc >>> 0);
-    return Buffer.concat([len, t, payload, crcBuf]);
   }
 }

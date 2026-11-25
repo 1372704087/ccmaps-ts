@@ -71,6 +71,13 @@ export class RenderSettings {
   /// <summary>Safety limit for in-memory rendering (0 = unlimited).</summary>
   MaxSurfacePixels = 0;
 
+  /** Write a JSON benchmark record (render time, peak RSS, output bytes, pixel hash). */
+  BenchJsonFile = '';
+  /** Write the rendered PNG's pixel hash (sha256 over the decoded RGB rows). */
+  PixelHashFile = '';
+  /** Upper bound for layered PSD export (0 = the engine's 32M-pixel default). */
+  PsdMaxPixels = 0;
+
   /// <summary>The game's own multiplayer colour order: start position N carries colour N.
   /// Read off captures whose spawn pinned one player per start position.</summary>
   static readonly DefaultPreCaptureColors: string[] = [
@@ -150,6 +157,10 @@ export class RenderSettings {
     registerFlag(['--output-png', '-p'], 'Output PNG file', () => (this.SavePNG = true));
     registerFlag(['--output-psd'], 'Output a layered PSD (terrain, buildings, infantry, vehicles, aircraft, naval, terrain objects, overlays, smudges)', () => (this.SavePSD = true));
     registerFlag(['--psd-preview'], 'With --output-psd, also write a flattened PNG preview (<name>.preview.png)', () => (this.PsdPreview = true));
+    registerValue(['--psd-max-pixels'], 'Maximum pixel count for layered PSD export (default 32000000)', (v) => {
+      const n = parseInt(v, 10);
+      this.PsdMaxPixels = Number.isFinite(n) ? Math.max(0, n) : 0;
+    });
     registerValue(['--png-compression', '-c'], 'Set PNG compression level (1-9)', (v) => {
       const n = parseInt(v, 10);
       // zlib throws RangeError outside 0..9; a bad CLI/API value must not kill the render.
@@ -160,6 +171,8 @@ export class RenderSettings {
     });
     registerFlag(['--no-expand-mixes'], 'Skip the expand(md)##.mix files. The CnCNet spawner never loads them, so a map rendered for CnCNet play should not use them either', () => (this.NoExpandMixes = true));
     registerValue(['--meta-json'], 'Write resolved map metadata (name, engine, theater, size, start positions) as JSON to the given file', (v) => (this.MetadataOutFile = v));
+    registerValue(['--bench-json'], 'Write a JSON benchmark record (render time, peak RSS, output bytes, pixel hash) to the given file', (v) => (this.BenchJsonFile = v));
+    registerValue(['--pixel-hash'], 'Write the rendered PNG pixel hash (sha256 of the decoded RGB rows) to the given file', (v) => (this.PixelHashFile = v));
     registerFlag(['--progress'], 'Print machine-readable render progress to stdout as progress:N:phase lines', () => (this.ReportProgress = true));
     registerFlag(['--mark-start-pos'], 'Mark starting positions', () => (this.MarkStartPos = true));
     registerFlag(['--start-pos-squared', '-S'], 'Mark starting positions in a squared manner', () => (this.StartPositionMarking = StartPositionMarking.Squared));
