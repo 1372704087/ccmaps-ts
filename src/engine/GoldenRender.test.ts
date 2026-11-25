@@ -135,6 +135,32 @@ test('Cached game VFS reproduces a fresh render', { skip: skipRa2 }, () => {
   assert.equal(viaCache('hillbtwn.map'), fresh('hillbtwn.map'));
 });
 
+test('Parallel band workers reuse archives without changing output', { skip: skipRa2 }, () => {
+  // the pooled band workers keep their parsed archives between renders, so two runs in one
+  // process must still produce identical bytes
+  const parallelRender = (map: string): string => {
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cncmaps-ts-band-'));
+    const mapCopy = path.join(outDir, map);
+    fs.copyFileSync(path.join(assetsRoot, 'maps', map), mapCopy);
+
+    const settings = new RenderSettings();
+    settings.InputFile = mapCopy;
+    settings.OutputDir = outDir;
+    settings.OutputFile = 'render';
+    settings.SavePNG = true;
+    settings.MixFilesDirectories = [mixDir!];
+    settings.ParallelWorkers = 2;
+    settings.StreamBands = 'on';
+    settings.BandHeight = 512;
+    settings.RenderMemoryMb = 256;
+
+    assert.equal(new RenderEngine().Render(settings), EngineResult.RenderedOk, `parallel render failed for ${map}`);
+    return pixelHash(path.join(outDir, 'render.png'));
+  };
+
+  assert.equal(parallelRender('hillbtwn.map'), parallelRender('hillbtwn.map'));
+});
+
 // Data-independent: validates the PNG decode + hash that the golden comparisons rely on, so a
 // broken helper fails here rather than hiding behind a skipped golden test.
 test('Golden: pixel hash round-trips a written PNG', () => {

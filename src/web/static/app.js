@@ -81,6 +81,10 @@
   let infoRenderText = null;
   let br = null;
   let brAssetsSig = '';
+  // Results of repeated identical browser renders (same map, same assets, same options).
+  const browserResultCache = new Map();
+  const BROWSER_RESULT_CACHE_BYTES = 128 * 1024 * 1024;
+  let browserResultCacheBytes = 0;
 
   const MODE_KEY = 'cncmaps_render_mode';
   const BR_CLIENT = window.CncmapsBrowserRender;
@@ -1093,6 +1097,7 @@
 
   function setLocalAssets(assets) {
     gameFiles = assets;
+    clearBrowserResultCache();
     const size = assets.reduce((sum, a) => sum + a.file.size, 0);
     assetInfo = { n: assets.length, size: fmtSize(size) };
     els.assetState.textContent = tf('assetLocalReady', assetInfo);
@@ -1101,6 +1106,7 @@
 
   function clearLocalAssets() {
     gameFiles = [];
+    clearBrowserResultCache();
     assetInfo = null;
     brAssetsSig = '';
     els.assetState.textContent = t('assetStateEmptyBrowser');
@@ -1569,6 +1575,58 @@
     return keys[name] || 'engineAuto';
   }
 
+  function clearBrowserResultCache() {
+    browserResultCache.clear();
+    browserResultCacheBytes = 0;
+  }
+
+  function cacheBrowserResult(key, res) {
+    if (!res || !res.blob || typeof res.blob.size !== 'number') return;
+    // one huge image would otherwise evict every smaller entry
+    if (res.blob.size > BROWSER_RESULT_CACHE_BYTES / 4) return;
+    const existing = browserResultCache.get(key);
+    if (existing) {
+      browserResultCacheBytes -= existing.blob.size;
+      browserResultCache.delete(key);
+    }
+    browserResultCache.set(key, res);
+    browserResultCacheBytes += res.blob.size;
+    while (browserResultCacheBytes > BROWSER_RESULT_CACHE_BYTES && browserResultCache.size > 1) {
+      const oldestKey = browserResultCache.keys().next().value;
+      const oldest = browserResultCache.get(oldestKey);
+      browserResultCache.delete(oldestKey);
+      browserResultCacheBytes -= oldest.blob.size;
+    }
+  }
+
+  function presentBrowserResult(res, renderValues) {
+    setProgress(100, t('complete'), () => t('complete'));
+    blobUrl = URL.createObjectURL(res.blob);
+    currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
+    showPreview(blobUrl, res.name);
+    setMapStats(selectedMap, res.stats);
+    addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues);
+    els.downloadBtn.disabled = false;
+    els.downloadBtn.dataset.url = blobUrl;
+    els.downloadBtn.dataset.name = res.name;
+    const ms = Date.now() - (renderStart || Date.now());
+    const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
+    const engKey = engineKeyFromName(res.engine);
+    els.engineTag.textContent = t('enginePrefix') + t(engKey);
+    infoRenderText = () => t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
+    refreshInfoRender();
+    setStatus('ok', t('complete'));
+    renderToast(t('renderDone') + ' · ' + res.name, 'ok');
+    lastRenderResult = {
+      ok: true,
+      blob: res.blob,
+      name: res.name,
+      engine: res.engine || 'AUTO',
+      width: Number(res.width) || undefined,
+      height: Number(res.height) || undefined,
+    };
+  }
+
   function render() {
     if (renderMode === 'browser') void renderBrowser();
     else void renderServer();
@@ -1604,28 +1662,9 @@
     let fallback = false;
     let startedRendering = false;
     try {
-      if (!br) {
-        br = BR_CLIENT.create();
-        br.onLog = (level, message) => {
-          appendLog(message, level >= 5 ? 'fatal' : level >= 4 ? 'error' : 'warn');
-          if (level >= 4) openLog();
-        };
-      }
-      setProgress(1, t('workerStarting'), () => t('workerStarting'));
-      const caps = await br.start();
-      if (!caps.fileReaderSync || !caps.offscreen) {
-        fallback = true;
-        throw Object.assign(new Error(t('browserUnsupported')), { code: 'UNSUPPORTED' });
-      }
       const sig = gameFiles.map((a) => a.path + ':' + a.file.size + ':' + (a.file.lastModified || 0)).join('|');
-      if (sig !== brAssetsSig) {
-        setProgress(2, t('phaseAssets'), () => t('phaseAssets'));
-        await br.setAssets(gameFiles);
-        brAssetsSig = sig;
-      }
-      startedRendering = true;
       const crop = cropValues();
-      const res = await br.render(selectedMap.file, selectedMap.name, {
+      const opts = {
         format: els.format.value,
         engine: els.engine.value,
         sizeMode: els.sizeMode.value,
@@ -1648,35 +1687,44 @@
         fixupTiles: els.fixTiles.checked,
         noExpandMixes: els.noExpandMixes.checked,
         ignoreLighting: els.ignoreLighting.checked,
-      }, (pct, phase) => {
+      };
+      const cacheKey = JSON.stringify([
+        sig,
+        selectedMap.name,
+        selectedMap.file.size,
+        selectedMap.file.lastModified || 0,
+        opts,
+      ]);
+      const cached = browserResultCache.get(cacheKey);
+      if (cached) {
+        presentBrowserResult(cached, renderValues);
+        return;
+      }
+
+      if (!br) {
+        br = BR_CLIENT.create();
+        br.onLog = (level, message) => {
+          appendLog(message, level >= 5 ? 'fatal' : level >= 4 ? 'error' : 'warn');
+          if (level >= 4) openLog();
+        };
+      }
+      setProgress(1, t('workerStarting'), () => t('workerStarting'));
+      const caps = await br.start();
+      if (!caps.fileReaderSync || !caps.offscreen) {
+        fallback = true;
+        throw Object.assign(new Error(t('browserUnsupported')), { code: 'UNSUPPORTED' });
+      }
+      if (sig !== brAssetsSig) {
+        setProgress(2, t('phaseAssets'), () => t('phaseAssets'));
+        await br.setAssets(gameFiles);
+        brAssetsSig = sig;
+      }
+      startedRendering = true;
+      const res = await br.render(selectedMap.file, selectedMap.name, opts, (pct, phase) => {
         setProgress(pct, phaseLabel(phase), () => phaseLabel(phase));
       });
-
-      setProgress(100, t('complete'), () => t('complete'));
-      blobUrl = URL.createObjectURL(res.blob);
-      currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
-      showPreview(blobUrl, res.name);
-      setMapStats(selectedMap, res.stats);
-      addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues);
-      els.downloadBtn.disabled = false;
-      els.downloadBtn.dataset.url = blobUrl;
-      els.downloadBtn.dataset.name = res.name;
-      const ms = Date.now() - (renderStart || Date.now());
-      const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
-      const engKey = engineKeyFromName(res.engine);
-      els.engineTag.textContent = t('enginePrefix') + t(engKey);
-      infoRenderText = () => t('recentPrefix') + res.name + ' · ' + t(engKey) + ' · ' + dur;
-      refreshInfoRender();
-      setStatus('ok', t('complete'));
-      renderToast(t('renderDone') + ' · ' + res.name, 'ok');
-      lastRenderResult = {
-        ok: true,
-        blob: res.blob,
-        name: res.name,
-        engine: res.engine || 'AUTO',
-        width: Number(res.width) || undefined,
-        height: Number(res.height) || undefined,
-      };
+      cacheBrowserResult(cacheKey, res);
+      presentBrowserResult(res, renderValues);
     } catch (e) {
       lastRenderResult = { ok: false, error: e };
       const code = e && e.code;

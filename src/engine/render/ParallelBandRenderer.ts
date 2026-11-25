@@ -10,16 +10,7 @@ import { pngZlibHeader, writePngChunk, writePngHeader } from '../../rendering/Pn
 
 const WORKER_BOOTSTRAP = `
 import('node:worker_threads').then(({ workerData }) => {
-  const ctl = new Int32Array(workerData.control);
-  import(workerData.entryUrl).then((m) => m.runBandWorker(workerData)).catch((e) => {
-    import('node:fs').then((fs) => {
-      try { fs.writeFileSync(workerData.errorFile, String((e && e.stack) || e)); } catch {}
-    }).finally(() => {
-      Atomics.store(ctl, 1, 1);
-      Atomics.add(ctl, 0, 1);
-      Atomics.notify(ctl, 0);
-    });
-  });
+  import(workerData.entryUrl).then((m) => m.runBandWorkerLoop()).catch(() => process.exit(1));
 });
 `;
 
@@ -27,6 +18,58 @@ import('node:worker_threads').then(({ workerData }) => {
 const SLOT_BYTES = 5 * 1024 * 1024;
 /** Raw bytes compressed per hand-off (filter byte + RGB rows). */
 const RAW_SEGMENT_BYTES = 4 * 1024 * 1024;
+
+interface PooledWorker {
+  worker: Worker;
+  /** Control block of the job in flight, so a dead thread can fail that job instead of hanging. */
+  job: { ctl: Int32Array; workerCount: number } | null;
+}
+
+/** Pools are keyed by the number of workers; a pooled thread keeps its parsed archives. */
+const workerPool = new Map<number, PooledWorker[]>();
+const MAX_POOLED_SIZES = 2;
+
+function markWorkerDead(slot: PooledWorker): void {
+  const job = slot.job;
+  slot.job = null;
+  if (job != null) {
+    Atomics.store(job.ctl, 1, 1);
+    for (let i = 0; i < job.workerCount; i++) Atomics.notify(job.ctl, 2 + job.workerCount + i);
+  }
+  for (const slots of workerPool.values()) {
+    const index = slots.indexOf(slot);
+    if (index !== -1) slots.splice(index, 1);
+  }
+}
+
+function terminatePool(): void {
+  for (const slots of workerPool.values()) {
+    for (const slot of slots) {
+      slot.job = null;
+      try { void slot.worker.terminate(); } catch { /* ignore */ }
+    }
+  }
+  workerPool.clear();
+}
+
+function takeWorkers(count: number): PooledWorker[] {
+  let slots = workerPool.get(count);
+  if (slots == null) {
+    if (workerPool.size >= MAX_POOLED_SIZES) terminatePool();
+    slots = [];
+    workerPool.set(count, slots);
+  }
+  while (slots.length < count) {
+    const slot: PooledWorker = {
+      worker: new Worker(WORKER_BOOTSTRAP, { eval: true, workerData: { entryUrl: entryUrl() } }),
+      job: null,
+    };
+    slot.worker.unref();
+    slot.worker.on('exit', () => markWorkerDead(slot));
+    slots.push(slot);
+  }
+  return slots;
+}
 
 export interface ParallelStreamRequest {
   settings: RenderSettings;
@@ -55,16 +98,21 @@ function entryUrl(): string {
     path.join('engine', 'render', 'bandWorkerMain.js'),
     path.join('dist', 'engine', 'render', 'bandWorkerMain.js'),
   ];
-  const start = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
-  for (const relative of relatives) {
-    let dir = start;
-    for (let i = 0; i < 6; i++) {
-      const candidate = path.join(dir, relative);
-      if (fs.existsSync(candidate)) return 'file:///' + candidate.replace(/\\/g, '/');
-      dir = path.dirname(dir);
+  const starts = [
+    process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd(),
+    process.cwd(),
+  ];
+  for (const start of starts) {
+    for (const relative of relatives) {
+      let dir = start;
+      for (let i = 0; i < 6; i++) {
+        const candidate = path.join(dir, relative);
+        if (fs.existsSync(candidate)) return 'file:///' + candidate.replace(/\\/g, '/');
+        dir = path.dirname(dir);
+      }
     }
   }
-  return 'file:///' + path.resolve(process.cwd(), relatives[0]).replace(/\\/g, '/');
+  return 'file:///' + path.resolve(process.cwd(), relatives[1]).replace(/\\/g, '/');
 }
 
 function report(settings: RenderSettings, last: { pct: number }, pct: number, phase: string): void {
@@ -82,7 +130,7 @@ export function runParallelStream(req: ParallelStreamRequest): void {
   const outDir = path.join(path.dirname(outPath), `.cncmaps-band-${process.pid}-${Date.now().toString(36)}`);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const control = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * (2 + workerCount));
+  const control = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * (2 + 2 * workerCount));
   const ctl = new Int32Array(control);
   const metadataFile = settings.MetadataOutFile;
   const snapshot = JSON.parse(JSON.stringify(settings, (key, value) => {
@@ -91,11 +139,10 @@ export function runParallelStream(req: ParallelStreamRequest): void {
   })) as Record<string, unknown>;
   snapshot.BandJob = null;
 
-  const workers: Worker[] = [];
+  const slots = takeWorkers(workerCount);
   const errors: string[] = [];
   const metas: Int32Array[] = [];
   const datas: SharedArrayBuffer[] = [];
-  const url = entryUrl();
   for (let i = 0; i < workerCount; i++) {
     const errorFile = path.join(outDir, `error-${i}.txt`);
     errors.push(errorFile);
@@ -103,10 +150,10 @@ export function runParallelStream(req: ParallelStreamRequest): void {
     const dataBuffer = new SharedArrayBuffer(SLOT_BYTES);
     metas.push(new Int32Array(metaBuffer));
     datas.push(dataBuffer);
-    const worker = new Worker(WORKER_BOOTSTRAP, {
-      eval: true,
-      workerData: {
-        entryUrl: url,
+    slots[i].job = { ctl, workerCount };
+    slots[i].worker.postMessage({
+      type: 'render',
+      job: {
         errorFile,
         control,
         workerIndex: i,
@@ -116,15 +163,12 @@ export function runParallelStream(req: ParallelStreamRequest): void {
         metadataFile,
       },
     });
-    worker.unref();
-    workers.push(worker);
   }
 
   const progress = { pct: 10 };
   report(settings, progress, 15, 'drawing tiles');
   const started = Date.now();
   const timeoutMs = 2 * 60 * 60 * 1000;
-  let done = 0;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   let fd = -1;
   try {
@@ -193,13 +237,26 @@ export function runParallelStream(req: ParallelStreamRequest): void {
     writePngChunk(fd, 'IEND', Buffer.alloc(0));
     fs.closeSync(fd);
     fd = -1;
+
+    // every strip has been consumed, but a worker is only idle once it reported its job done:
+    // the pooled thread must not receive the next render before that
+    for (let i = 0; i < workerCount; i++) {
+      const idle = 2 + workerCount + i;
+      while (Atomics.load(ctl, idle) === 0) {
+        if (Atomics.load(ctl, 1) !== 0) throw new Error(readErrors(errors) || 'parallel band worker failed');
+        if (Date.now() - started > timeoutMs) throw new Error('parallel stream timed out');
+        Atomics.wait(ctl, idle, 0, 250);
+      }
+    }
+    for (const slot of slots) slot.job = null;
     report(settings, progress, 100, 'done');
+  } catch (e) {
+    // a failed worker cannot be trusted with the next job
+    terminatePool();
+    throw e;
   } finally {
     if (fd >= 0) {
       try { fs.closeSync(fd); } catch { /* ignore */ }
-    }
-    for (const worker of workers) {
-      try { void worker.terminate(); } catch { /* ignore */ }
     }
     try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }

@@ -111,6 +111,9 @@ function makeSettings(job, engine, vfs) {
   s.StreamBands = job.streamBands || 'auto';
   s.RenderMemoryMb = job.renderMemoryMb || 0;
   s.ParallelWorkers = job.parallelWorkers || 1;
+  // the band workers are pooled and keep their parsed archives, so parallel streaming pays off
+  // for repeated jobs too; PSD layers cannot come from strips
+  if (s.ParallelWorkers > 1 && !s.SavePSD) s.StreamBands = 'on';
   s.MetadataOutFile = job.metadataFile || '';
   s.ReportProgress = false;
   s.ProgressSink = (percent, phase) => post({ type: 'progress', percent, phase });
