@@ -250,7 +250,7 @@ export class TileCollection extends GameCollection {
     super(CollectionType.Tiles, theater, config, vfs, rules as IniFile, art as IniFile);
     this._theaterSettings = theaterSettings;
     if (theaterIni == null) {
-      this._theaterIni = this._vfs.open(theaterSettings.TheaterIni) as IniFile;
+      this._theaterIni = this._vfs.openIni(theaterSettings.TheaterIni) as IniFile;
       if (this._theaterIni == null) {
         logger.warn('Unavailable theater loaded, theater.ini not found');
         return;

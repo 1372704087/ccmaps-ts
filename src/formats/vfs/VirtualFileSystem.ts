@@ -20,12 +20,30 @@ import { CacheMethod, IArchive } from './IArchive.js';
 import { DirArchive } from './DirArchive.js';
 import { VirtualFile } from './VirtualFile.js';
 
+/** Formats the renderer only reads. A long-lived worker can share one parsed instance across
+ * renders, so theater tiles, SHP frames and voxels are decoded once instead of per map. */
+const SharedFileFormats = new Set<FileFormat>([
+  FileFormat.Csf,
+  FileFormat.Pkt,
+  FileFormat.Missions,
+  FileFormat.Tmp,
+  FileFormat.Shp,
+  FileFormat.Vxl,
+  FileFormat.Hva,
+  FileFormat.Vpl,
+  FileFormat.Pal,
+]);
+
 export class VirtualFileSystem {
   readonly allArchives: IArchive[] = [];
   /** Parse rules/art once and hand out per-render copies. Long-lived workers enable this;
    * one-shot CLI runs keep the plain parse path. */
   CacheParsedInis = false;
+  /** Bound for the shared read-only files; a theater's tiles and SHPs take roughly 15 MB. */
+  static SharedFileBudgetBytes = 96 * 1024 * 1024;
   private readonly parsedInis = new Map<string, IniFile>();
+  private readonly sharedFiles = new Map<string, VirtualFile>();
+  private sharedFileBytes = 0;
 
   /** Cached parse-once INI access; callers own the returned file and may mutate it. */
   openIni(filename: string): IniFile | null {
@@ -40,6 +58,20 @@ export class VirtualFileSystem {
     return base.clone();
   }
 
+  /** True when this mix name was already resolved into an archive (addItem can be repeated). */
+  private hasArchive(pathname: string): boolean {
+    return this.allArchives.some((a) => a instanceof MixFile && a.fileName === pathname);
+  }
+
+  private evictSharedFiles(): void {
+    while (this.sharedFileBytes > VirtualFileSystem.SharedFileBudgetBytes && this.sharedFiles.size > 0) {
+      const key = this.sharedFiles.keys().next().value as string;
+      const old = this.sharedFiles.get(key);
+      this.sharedFiles.delete(key);
+      if (old != null) this.sharedFileBytes -= old.length;
+    }
+  }
+
   fileExists(filename: string): boolean {
     return this.allArchives.some((v) => v !== null && v.containsFile(filename));
   }
@@ -51,13 +83,34 @@ export class VirtualFileSystem {
 
   open(filename: string, format: FileFormat = FileFormat.None, m: CacheMethod = CacheMethod.Default): VirtualFile | null {
     if (this.allArchives.length === 0) return null;
+    // Resolve the format up front so a shared cache entry is found whichever way the caller
+    // named it: open(path) used to leave the format to the archive itself.
+    if (format === FileFormat.None) format = guessFormat(filename);
+    const shared = this.CacheParsedInis && m === CacheMethod.Default && SharedFileFormats.has(format);
+    const key = format + '|' + filename.toLowerCase();
+    if (shared) {
+      const cached = this.sharedFiles.get(key);
+      if (cached != null) {
+        // refresh LRU position
+        this.sharedFiles.delete(key);
+        this.sharedFiles.set(key, cached);
+        return cached;
+      }
+    }
     const archive = this.allArchives.find((v) => v !== null && v.containsFile(filename));
     if (!archive) return null;
+    let file: VirtualFile | null;
     try {
-      return archive.openFile(filename, format, m);
+      file = archive.openFile(filename, format, m);
     } catch {
       return null;
     }
+    if (file != null && shared) {
+      this.sharedFiles.set(key, file);
+      this.sharedFileBytes += file.length;
+      this.evictSharedFiles();
+    }
+    return file;
   }
 
   addItem(pathname: string, m = CacheMethod.Default): boolean {
@@ -77,6 +130,9 @@ export class VirtualFileSystem {
     if (stat?.isFile()) {
       const ext = path.extname(pathname).toLowerCase();
       if (FormatHelper.MixArchiveExtensions.includes(ext)) {
+        // repeated renders re-add the theater mixes; keep the parsed archive instead of
+        // re-reading its header every time
+        if (this.hasArchive(pathname)) return true;
         // open the archive lazily: only its directory header is parsed, entries are read on demand
         const lazy = MixFile.open(pathname);
         if (lazy != null) {
@@ -92,6 +148,7 @@ export class VirtualFileSystem {
     }
     // virtual mix file
     else if (this.fileExists(pathname)) {
+      if (this.hasArchive(pathname)) return true;
       // Mix names during loadMixes are relative ('ra2md.mix'); resolve them to the real file so
       // the archive can be opened lazily instead of being read whole through the DirArchive.
       for (const archive of this.allArchives) {
@@ -230,6 +287,8 @@ export class VirtualFileSystem {
     for (const arch of this.allArchives) arch?.dispose();
     this.allArchives.length = 0;
     this.parsedInis.clear();
+    this.sharedFiles.clear();
+    this.sharedFileBytes = 0;
   }
 
   dispose(): void {

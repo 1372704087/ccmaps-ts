@@ -109,6 +109,7 @@ export class PngStreamWriter {
   private rowsWritten = 0;
   private finished = false;
   private deflater: ParallelDeflater | null = null;
+  private deflaterWorkers = 0;
 
   constructor(path: string, width: number, height: number, bytesPerPixel: number, compressionLevel: number) {
     if (width <= 0 || height <= 0) throw new Error('Cannot write an empty PNG');
@@ -137,7 +138,8 @@ export class PngStreamWriter {
     const workers = PngWriter.ParallelCompressionWorkers;
     if (workers > 1 && (this.rowBytes + 1) * height >= 8 * 1024 * 1024) {
       try {
-        this.deflater = new ParallelDeflater(workers, level);
+        this.deflater = PngWriter.acquireDeflater(workers, level);
+        this.deflaterWorkers = workers;
       } catch {
         this.deflater = null; // e.g. no worker_threads in this environment
       }
@@ -192,7 +194,7 @@ export class PngStreamWriter {
     if (this.rowsInChunk > 0) this.flushChunk(true);
     if (this.deflater) {
       while (this.deflater.pendingCount > 0) this.writeCompressed(this.deflater.collect());
-      this.deflater.close();
+      PngWriter.releaseDeflater(this.deflater, this.deflaterWorkers, this.level);
       this.deflater = null;
     }
     const adler = Buffer.allocUnsafe(4);
@@ -265,6 +267,25 @@ export class PngStreamWriter {
 export class PngWriter {
   /** Worker threads used to compress PNG scanline blocks (1 = single-threaded). */
   static ParallelCompressionWorkers = 1;
+  /** Draining a rendered image takes far less time than starting the worker threads, so a
+   * long-lived render worker keeps its compression workers between images. */
+  private static readonly deflaterPool = new Map<string, ParallelDeflater[]>();
+
+  static acquireDeflater(workers: number, level: number): ParallelDeflater {
+    const reused = this.deflaterPool.get(workers + '|' + level)?.pop();
+    return reused ?? new ParallelDeflater(workers, level);
+  }
+
+  /** Only complete, drained worker sets are pooled; a broken one is closed by its writer. */
+  static releaseDeflater(deflater: ParallelDeflater, workers: number, level: number): void {
+    const key = workers + '|' + level;
+    let free = this.deflaterPool.get(key);
+    if (free == null) {
+      free = [];
+      this.deflaterPool.set(key, free);
+    }
+    free.push(deflater);
+  }
 
   static save(
     path: string,
