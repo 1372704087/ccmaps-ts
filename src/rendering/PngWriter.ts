@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 // CLI down before the feature check can fall back to the JS CRC.
 import * as zlib from 'node:zlib';
 import { Rectangle } from '../shared/Geometry.js';
+import { ParallelDeflater } from './ParallelDeflater.js';
 
 const crcTable = buildCrcTable();
 type Crc32Fn = (data: Uint8Array, value?: number) => number;
@@ -107,6 +108,7 @@ export class PngStreamWriter {
   private firstChunk = true;
   private rowsWritten = 0;
   private finished = false;
+  private deflater: ParallelDeflater | null = null;
 
   constructor(path: string, width: number, height: number, bytesPerPixel: number, compressionLevel: number) {
     if (width <= 0 || height <= 0) throw new Error('Cannot write an empty PNG');
@@ -129,6 +131,17 @@ export class PngStreamWriter {
     ihdr[8] = 8; // bit depth
     ihdr[9] = 2; // color type: truecolor
     writeChunk(this.fd, CHUNK_IHDR, ihdr);
+
+    // Compressing several scanline blocks at once is the biggest win on big images; small
+    // outputs stay on the single-thread path so the worker startup does not dominate.
+    const workers = PngWriter.ParallelCompressionWorkers;
+    if (workers > 1 && (this.rowBytes + 1) * height >= 8 * 1024 * 1024) {
+      try {
+        this.deflater = new ParallelDeflater(workers, level);
+      } catch {
+        this.deflater = null; // e.g. no worker_threads in this environment
+      }
+    }
   }
 
   /** Appends `rows` output rows taken from `src` starting at `srcFirstRow`, cropping
@@ -177,6 +190,11 @@ export class PngStreamWriter {
       throw new Error(`PNG stream ended after ${this.rowsWritten} of ${this.height} rows`);
     }
     if (this.rowsInChunk > 0) this.flushChunk(true);
+    if (this.deflater) {
+      while (this.deflater.pendingCount > 0) this.writeCompressed(this.deflater.collect());
+      this.deflater.close();
+      this.deflater = null;
+    }
     const adler = Buffer.allocUnsafe(4);
     writeBEU32(adler, 0, (((this.adlerB << 16) | this.adlerA) >>> 0));
     writeChunk(this.fd, CHUNK_IDAT, adler);
@@ -189,6 +207,10 @@ export class PngStreamWriter {
   abort(): void {
     if (this.finished) return;
     this.finished = true;
+    if (this.deflater) {
+      this.deflater.close();
+      this.deflater = null;
+    }
     try { fs.closeSync(this.fd); } catch { /* ignore */ }
   }
 
@@ -209,10 +231,27 @@ export class PngStreamWriter {
     this.adlerA = a;
     this.adlerB = b;
 
-    const compressed = zlib.deflateRawSync(this.raw.subarray(0, filled), {
+    if (this.deflater) {
+      while (this.deflater.freeCount === 0) this.writeCompressed(this.deflater.collect());
+      this.deflater.submit(this.raw.subarray(0, filled), last);
+      // keep up to one block per worker in flight, draining in submission order
+      while (this.deflater.pendingCount >= this.deflater.workers) {
+        this.writeCompressed(this.deflater.collect());
+      }
+      this.rawFill = 0;
+      this.rowsInChunk = 0;
+      return;
+    }
+
+    this.writeCompressed(zlib.deflateRawSync(this.raw.subarray(0, filled), {
       level: this.level,
       finishFlush: last ? zlib.constants.Z_FINISH : zlib.constants.Z_SYNC_FLUSH,
-    });
+    }));
+    this.rawFill = 0;
+    this.rowsInChunk = 0;
+  }
+
+  private writeCompressed(compressed: Buffer): void {
     if (this.firstChunk) {
       const header = Buffer.from([0x78, this.level === 0 ? 0x01 : 0x9c]);
       writeChunk(this.fd, CHUNK_IDAT, Buffer.concat([header, compressed]));
@@ -220,12 +259,13 @@ export class PngStreamWriter {
     } else {
       writeChunk(this.fd, CHUNK_IDAT, compressed);
     }
-    this.rawFill = 0;
-    this.rowsInChunk = 0;
   }
 }
 
 export class PngWriter {
+  /** Worker threads used to compress PNG scanline blocks (1 = single-threaded). */
+  static ParallelCompressionWorkers = 1;
+
   static save(
     path: string,
     data: Uint8Array,

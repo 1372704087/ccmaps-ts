@@ -84,6 +84,8 @@ export class RenderSettings {
   RenderMemoryMb = 0;
   /** Worker threads used to draw streamed strips in parallel (1 = single-threaded). */
   ParallelWorkers = 1;
+  /** Worker threads used to compress PNG blocks (0 = auto, 1 = single-threaded). */
+  PngWorkers = 0;
   /** Internal: worker-thread band job. Set by the parallel streamer, never by the CLI. */
   BandJob: {
     outDir: string;
@@ -225,6 +227,10 @@ export class RenderSettings {
     registerValue(['--parallel-workers'], 'Worker threads drawing streamed strips in parallel (1 = single thread, max 8); each worker loads the game assets', (v) => {
       const n = parseInt(v, 10);
       this.ParallelWorkers = Number.isFinite(n) ? Math.min(8, Math.max(1, n)) : 1;
+    });
+    registerValue(['--png-workers'], 'Worker threads compressing PNG blocks (0 = auto from CPU count, 1 = single thread, max 8)', (v) => {
+      const n = parseInt(v, 10);
+      this.PngWorkers = Number.isFinite(n) ? Math.min(8, Math.max(0, n)) : 0;
     });
     registerValue(['--crop'], 'Crop output before scaling: x,y,width,height as percentages of the selected size rect (e.g. 10,10,80,80)', (v) => {
       const parts = v.split(',').map((x) => parseFloat(x));

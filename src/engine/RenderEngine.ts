@@ -29,7 +29,7 @@ import { Palette } from '../rendering/Palette.js';
 import { resizeRegionBox } from '../rendering/ImageUtil.js';
 import { Rand } from '../shared/Util.js';
 import { DrawingSurface, SurfaceFormat } from '../rendering/DrawingSurface.js';
-import { PngStreamWriter } from '../rendering/PngWriter.js';
+import { PngStreamWriter, PngWriter } from '../rendering/PngWriter.js';
 import { PsdExporter } from '../rendering/PsdExporter.js';
 
 export class RenderEngine {
@@ -49,6 +49,12 @@ export class RenderEngine {
       logger.fatal(`File not found: ${settings.InputFile}`);
       return EngineResult.Exception;
     }
+
+    // PNG scanline blocks are independent, so compression can run on several cores without
+    // changing a single output byte.
+    PngWriter.ParallelCompressionWorkers = settings.PngWorkers > 0
+      ? Math.min(8, settings.PngWorkers)
+      : Math.min(4, Math.max(1, os.availableParallelism() - 1));
 
     const mapBytes = fs.readFileSync(settings.InputFile);
     const mapName = path.basename(settings.InputFile);
