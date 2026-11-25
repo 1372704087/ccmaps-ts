@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawn } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -26,6 +27,10 @@ const GAME_DIRS = (process.env.CNCMAPS_GAME_DIRS || '')
   .filter((s) => s !== '');
 if (GAME_DIRS.length === 0 && process.env.CNCMAPS_GAME_DIR) GAME_DIRS.push(process.env.CNCMAPS_GAME_DIR);
 const CLI_JS = path.join(ROOT, 'dist', 'cli.js');
+const RENDER_WORKER_JS = path.join(ROOT, 'src', 'web', 'render-worker.mjs');
+// Long-lived render workers keep a parsed VirtualFileSystem per game folder, so repeated
+// renders skip the archive scan. Set CNCMAPS_WEB_POOL=0 to go back to one child per job.
+const USE_POOL = process.env.CNCMAPS_WEB_POOL !== '0';
 const PORT = clampInt(process.env.CNCMAPS_WEB_PORT, 1, 65535, 5173);
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 // JSON control bodies are tiny; without a cap any local page can make the server
@@ -408,8 +413,47 @@ function buildArgs(p) {
   const outFile = path.join(jobDir, 'render' + ext);
   const friendlyBase = displayName.replace(/\.(map|yrm|mpr)$/i, '') || 'map';
   const mime = fmt === 'jpg' ? 'image/jpeg' : (fmt === 'psd' ? 'image/vnd.adobe.photoshop' : 'image/png');
+  const markerShape = ['squared', 'circled', 'diamond', 'ellipsed', 'star', 'tiled'].includes(String(p.markerShape))
+    ? String(p.markerShape) : 'squared';
+  const settings = {
+    inputFile: infile,
+    outputDir: jobDir,
+    outputFile: 'render',
+    mixDirs: GAME_DIRS.slice(),
+    noExpandMixes: p.noExpandMixes === true,
+    format: fmt,
+    pngQuality: pngLevel,
+    jpegQuality,
+    engine: p.engine || 'auto',
+    sizeMode: p.sizeMode === 'local' || p.sizeMode === 'full' ? p.sizeMode : 'auto',
+    previewWidth,
+    crop: p.crop && typeof p.crop === 'object' ? {
+      x: clampInt(p.crop.x, 0, 100, 0),
+      y: clampInt(p.crop.y, 0, 100, 0),
+      width: clampInt(p.crop.width, 1, 100, 100),
+      height: clampInt(p.crop.height, 1, 100, 100),
+    } : null,
+    aspect: ['1:1', '4:5', '16:9', '9:16'].includes(p.aspect) ? p.aspect : 'free',
+    markStartPos: p.markStartPos === true,
+    markerShape,
+    markerSize: clampInt(p.markerSize, 2, 6, 4),
+    markOre: p.markOre === true,
+    tunnelPaths: p.tunnelPaths === true,
+    tunnelPosition: p.tunnelPosition === true,
+    markIceGrowth: p.markIceGrowth === true,
+    compressTiles: p.compressTiles === true,
+    fixOverlays: p.fixOverlays === true,
+    fixupTiles: p.fixupTiles === true,
+    ignoreLighting: p.ignoreLighting === true,
+    maxSurfacePixels: MAX_SURFACE_PIXELS,
+    streamBands: streamBands === 'on' || streamBands === 'off' ? streamBands : 'auto',
+    renderMemoryMb,
+    parallelWorkers,
+    metadataFile: metaFile,
+  };
   return {
     args,
+    settings,
     jobDir,
     fmt,
     outFile,
@@ -476,11 +520,176 @@ function finishRenderJob(job, event) {
 function cancelRenderJob(job) {
   if (!job || job.finished) return;
   job.cancelled = true;
+  if (job.poolSlot) {
+    const slot = job.poolSlot;
+    job.poolSlot = null;
+    slot.record = null;
+    slot.expectedExit = true;
+    clearTimeout(slot.timer);
+    slot.timer = null;
+    try { slot.worker.terminate(); } catch { /* ignore */ }
+    cleanupJobDir(job);
+    finishRenderJob(job, { type: 'done', ok: false, cancelled: true });
+    return;
+  }
   if (job.child) {
     try { job.child.kill(); } catch { /* ignore */ }
   } else {
     finishRenderJob(job, { type: 'done', ok: false, cancelled: true });
   }
+}
+
+// ---- long-lived render worker pool -------------------------------------------------------
+const poolSlots = [];
+let poolDisabled = false;
+let poolFailures = 0;
+
+async function finishSuccess(record) {
+  const job = record.job;
+  try {
+    const mainStat = await fs.promises.stat(job.outFile);
+    let meta = null;
+    try {
+      if (job.metaFile && fs.existsSync(job.metaFile)) {
+        meta = JSON.parse(await fs.promises.readFile(job.metaFile, 'utf8'));
+      }
+    } catch { /* metadata is optional */ }
+    // Keep the result on disk and serve it with a read stream instead of
+    // holding the whole image in the server's heap.
+    cachePut(job.token, {
+      file: job.outFile, size: mainStat.size, name: job.name, mime: job.mime, at: Date.now(),
+    });
+    record.keepDir = true;
+    let previewUrl = null;
+    if (job.fmt === 'psd') {
+      const previewFile = job.outFile.replace(/\.psd$/i, '') + '.preview.png';
+      try {
+        if (fs.existsSync(previewFile)) {
+          const previewStat = await fs.promises.stat(previewFile);
+          const previewToken = job.token + 'p';
+          const previewName = job.name.replace(/\.psd$/i, '') + '.png';
+          cachePut(previewToken, {
+            file: previewFile, size: previewStat.size, name: previewName, mime: 'image/png', at: Date.now(),
+          });
+          previewUrl = '/image/' + previewToken;
+        }
+      } catch { /* the preview is optional; the PSD download still works */ }
+    }
+    finishRenderJob(record, {
+      type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name,
+      previewUrl: previewUrl || undefined, meta,
+    });
+  } catch (e) {
+    cleanupJobDir(record);
+    finishRenderJob(record, { type: 'error', message: String(e && e.message || e) });
+  }
+}
+
+function slotFailed(slot, error) {
+  const record = slot.record;
+  slot.record = null;
+  clearTimeout(slot.timer);
+  slot.timer = null;
+  try { slot.worker.terminate(); } catch { /* ignore */ }
+  if (!record) return;
+  record.poolSlot = null;
+  cleanupJobDir(record);
+  if (record.timedOut) {
+    finishRenderJob(record, {
+      type: 'done', ok: false, timedOut: true,
+      message: `Render timed out after ${RENDER_TIMEOUT_MS / 1000} seconds`,
+    });
+  } else {
+    finishRenderJob(record, { type: 'error', message: String(error && error.message || error) });
+  }
+}
+
+function makePoolSlot() {
+  const slot = { worker: null, record: null, timer: null, served: false, expectedExit: false };
+  let worker;
+  try {
+    worker = new Worker(RENDER_WORKER_JS);
+  } catch {
+    poolDisabled = true;
+    return null;
+  }
+  slot.worker = worker;
+  worker.on('message', (msg) => {
+    const record = slot.record;
+    if (!msg || !record) return;
+    if (msg.type === 'progress') {
+      record.wnd({ type: 'progress', percent: msg.percent, phase: msg.phase });
+    } else if (msg.type === 'saved') {
+      record.wnd({ type: 'saved' });
+    } else if (msg.type === 'log') {
+      record.wnd({ type: 'log', level: msg.level, message: msg.message });
+    } else if (msg.type === 'done') {
+      clearTimeout(slot.timer);
+      slot.timer = null;
+      slot.record = null;
+      slot.served = true;
+      record.poolSlot = null;
+      if (record.cancelled) {
+        cleanupJobDir(record);
+        finishRenderJob(record, { type: 'done', ok: false, cancelled: true });
+      } else if (msg.ok) {
+        void finishSuccess(record);
+      } else {
+        cleanupJobDir(record);
+        finishRenderJob(record, {
+          type: 'done', ok: false, code: msg.result, message: msg.message || '',
+        });
+      }
+    }
+  });
+  worker.on('error', (e) => slotFailed(slot, e));
+  worker.on('exit', () => {
+    const i = poolSlots.indexOf(slot);
+    if (i !== -1) poolSlots.splice(i, 1);
+    if (slot.record) slotFailed(slot, new Error('render worker exited'));
+    if (!slot.served) {
+      if (!slot.expectedExit) {
+        poolFailures += 1;
+        if (poolFailures >= 2) poolDisabled = true;
+      }
+    }
+    if (USE_POOL && !poolDisabled) ensurePool();
+  });
+  poolSlots.push(slot);
+  return slot;
+}
+
+function ensurePool() {
+  if (poolDisabled) return;
+  while (poolSlots.length < MAX_RENDER_JOBS) {
+    if (makePoolSlot() == null) return;
+  }
+}
+
+function startPooled(record, job) {
+  if (poolDisabled) return false;
+  ensurePool();
+  const slot = poolSlots.find((s) => s.record == null) ?? null;
+  if (!slot) return false;
+  slot.record = record;
+  record.poolSlot = slot;
+  slot.timer = setTimeout(() => {
+    record.timedOut = true;
+    slot.expectedExit = true;
+    record.wnd({ type: 'log', level: 'fatal', message: `Render timed out after ${RENDER_TIMEOUT_MS / 1000}s` });
+    try { slot.worker.terminate(); } catch { /* ignore */ }
+  }, RENDER_TIMEOUT_MS);
+  slot.timer.unref?.();
+  try {
+    slot.worker.postMessage({ type: 'render', job: job.settings });
+  } catch (e) {
+    slot.record = null;
+    record.poolSlot = null;
+    clearTimeout(slot.timer);
+    slot.timer = null;
+    return false;
+  }
+  return true;
 }
 
 function streamRender(req, res, params) {
@@ -511,6 +720,7 @@ function streamRender(req, res, params) {
 
   const record = {
     id: job.token,
+    job,
     jobDir: job.jobDir,
     uploadFile: job.uploadFile,
     res,
@@ -519,6 +729,7 @@ function streamRender(req, res, params) {
     cancelled: false,
     clientGone: false,
     child: null,
+    poolSlot: null,
     onStart: start,
     wnd(obj) {
       if (this.clientGone || res.writableEnded) return;
@@ -548,6 +759,11 @@ function streamRender(req, res, params) {
       return;
     }
     record.wnd({ type: 'start', url: job.url, name: job.name, engine: job.engine });
+    if (USE_POOL) {
+      try {
+        if (startPooled(record, job)) return;
+      } catch { /* fall back to a child process below */ }
+    }
     let child;
     try {
       child = spawn(process.execPath, job.args, { cwd: ROOT });
@@ -600,43 +816,7 @@ function streamRender(req, res, params) {
       }
       const ok = code === 0 && fs.existsSync(job.outFile);
       if (ok) {
-        try {
-          const mainStat = await fs.promises.stat(job.outFile);
-          let meta = null;
-          try {
-            if (job.metaFile && fs.existsSync(job.metaFile)) {
-              meta = JSON.parse(await fs.promises.readFile(job.metaFile, 'utf8'));
-            }
-          } catch { /* metadata is optional */ }
-          // Keep the result on disk and serve it with a read stream instead of
-          // holding the whole image in the server's heap.
-          cachePut(job.token, {
-            file: job.outFile, size: mainStat.size, name: job.name, mime: job.mime, at: Date.now(),
-          });
-          record.keepDir = true;
-          let previewUrl = null;
-          if (job.fmt === 'psd') {
-            const previewFile = job.outFile.replace(/\.psd$/i, '') + '.preview.png';
-            try {
-              if (fs.existsSync(previewFile)) {
-                const previewStat = await fs.promises.stat(previewFile);
-                const previewToken = job.token + 'p';
-                const previewName = job.name.replace(/\.psd$/i, '') + '.png';
-                cachePut(previewToken, {
-                  file: previewFile, size: previewStat.size, name: previewName, mime: 'image/png', at: Date.now(),
-                });
-                previewUrl = '/image/' + previewToken;
-              }
-            } catch { /* the preview is optional; the PSD download still works */ }
-          }
-          finishRenderJob(record, {
-            type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name,
-            previewUrl: previewUrl || undefined, meta,
-          });
-        } catch (e) {
-          cleanupJobDir(record);
-          finishRenderJob(record, { type: 'error', message: String(e && e.message || e) });
-        }
+        await finishSuccess(record);
       } else {
         cleanupJobDir(record);
         finishRenderJob(record, {
@@ -734,6 +914,8 @@ const server = http.createServer(async (req, res) => {
         imageCacheBytes,
         imageCacheFiles: imageCache.size,
         maxImageCacheBytes: IMAGE_MAX_BYTES,
+        renderPool: poolDisabled ? 0 : poolSlots.length,
+        renderPoolIdle: poolSlots.filter((slot) => slot.record == null).length,
         activeRenderJobs,
         queuedRenders: renderQueue.length,
       });
@@ -825,6 +1007,10 @@ function shutdown(signal) {
     if (job.child) try { job.child.kill('SIGKILL'); } catch { /* ignore */ }
     cleanupJobDir(job);
   }
+  for (const slot of poolSlots) {
+    slot.expectedExit = true;
+    try { void slot.worker.terminate(); } catch { /* ignore */ }
+  }
   console.log(`\n  ${signal}: stopping web UI`);
   process.exit(0);
 }
@@ -844,5 +1030,8 @@ server.listen(PORT, '127.0.0.1', () => {
     `  Max render surface: ${MAX_SURFACE_PIXELS} pixels; queue max ${RENDER_QUEUE_MAX}\n` +
     `  Render timeout: ${RENDER_TIMEOUT_MS / 60000} min\n` +
     `  Rendered images stay on disk in the scratch dir (cache ${IMAGE_MAX} items / ${IMAGE_MAX_BYTES / 1024 / 1024} MB, streamed to clients).\n`,
+    USE_POOL
+      ? `  Render pool: ${MAX_RENDER_JOBS} long-lived worker(s) reuse parsed game archives (CNCMAPS_WEB_POOL=0 disables).\n`
+      : '  Render pool: disabled; one child process per render.\n',
   );
 });

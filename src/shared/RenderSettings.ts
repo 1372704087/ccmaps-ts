@@ -2,6 +2,7 @@
 import { EngineType, SizeMode, StartPositionMarking, PreviewMarkersType } from './Enums.js';
 import { logger } from './Log.js';
 import type { DrawingSurface } from '../rendering/DrawingSurface.js';
+import type { VirtualFileSystem } from '../formats/vfs/VirtualFileSystem.js';
 import type { Rectangle } from './Geometry.js';
 import type { MapStats } from '../engine/map/MapStats.js';
 
@@ -87,8 +88,7 @@ export class RenderSettings {
   /** Worker threads used to compress PNG blocks (0 = auto, 1 = single-threaded). */
   PngWorkers = 0;
   /** Internal: worker-thread band job. Set by the parallel streamer, never by the CLI. */
-  BandJob: {
-    outDir: string;
+  BandJob: {    outDir: string;
     workerIndex: number;
     workerCount: number;
     /** Shared control block: ready/ack sequence, band index, adler and block length. */
@@ -98,6 +98,8 @@ export class RenderSettings {
   } | null = null;
   /** Internal: shared progress/failure counters for a parallel band job. */
   BandJobControl: Int32Array | null = null;
+  /** Optional pre-loaded game data: a long-lived worker can reuse one VFS across renders. */
+  AssetVfs: VirtualFileSystem | null = null;
 
   /// <summary>The game's own multiplayer colour order: start position N carries colour N.
   /// Read off captures whose spawn pinned one player per start position.</summary>

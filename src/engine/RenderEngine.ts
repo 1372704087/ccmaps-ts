@@ -114,11 +114,14 @@ export class RenderEngine {
     }
     Operations.SetVeinRandomizer(veinRng);
 
-    // 2. Build the virtual file system from the given mix directories.
-    const vfs = new VirtualFileSystem();
+    // 2. Build the virtual file system from the given mix directories. A long-lived worker can
+    // inject an already-loaded VFS so repeated renders skip the archive scan entirely.
+    const vfs = settings.AssetVfs ?? new VirtualFileSystem();
     const dirs = settings.MixFilesDirectories.length > 0 ? settings.MixFilesDirectories : [RenderEngine.defaultMixDir(engine)];
-    for (const d of dirs) if (d !== '') vfs.addItem(d);
-    vfs.loadMixes(dirs.length > 0 ? dirs[0] : '', engine, !settings.NoExpandMixes);
+    if (settings.AssetVfs == null) {
+      for (const d of dirs) if (d !== '') vfs.addItem(d);
+      vfs.loadMixes(dirs.length > 0 ? dirs[0] : '', engine, !settings.NoExpandMixes);
+    }
 
     // 3. Parse the map file.
     let mapFile: MapFile;
