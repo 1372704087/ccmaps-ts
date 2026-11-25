@@ -26,16 +26,23 @@ interface Slot {
 }
 
 /** Finds the compiled worker entry next to (or above) the running script, so the CLI, tests
- * and library callers all resolve the same dist layout. */
+ * and library callers all resolve the same dist layout. Server workers run from src/, so the
+ * compiled dist folder is also searched. */
 function entryUrl(): string {
-  const relative = path.join('rendering', 'deflateWorkerMain.js');
-  let dir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
-  for (let i = 0; i < 6; i++) {
-    const candidate = path.join(dir, relative);
-    if (fs.existsSync(candidate)) return 'file:///' + candidate.replace(/\\/g, '/');
-    dir = path.dirname(dir);
+  const relatives = [
+    path.join('rendering', 'deflateWorkerMain.js'),
+    path.join('dist', 'rendering', 'deflateWorkerMain.js'),
+  ];
+  const start = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
+  for (const relative of relatives) {
+    let dir = start;
+    for (let i = 0; i < 6; i++) {
+      const candidate = path.join(dir, relative);
+      if (fs.existsSync(candidate)) return 'file:///' + candidate.replace(/\\/g, '/');
+      dir = path.dirname(dir);
+    }
   }
-  return 'file:///' + path.resolve(process.cwd(), relative).replace(/\\/g, '/');
+  return 'file:///' + path.resolve(process.cwd(), relatives[0]).replace(/\\/g, '/');
 }
 
 export class ParallelDeflater {

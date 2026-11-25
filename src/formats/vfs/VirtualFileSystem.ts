@@ -6,7 +6,7 @@ import { FileFormat } from '../FileFormat.js';
 import { FormatHelper, guessFormat } from '../FormatHelper.js';
 import { MixFile } from '../MixFile.js';
 // Side-effect imports: ensure format factories are registered before any open().
-import '../IniFile.js';
+import { IniFile } from '../IniFile.js';
 import '../PalFile.js';
 import '../ShpFile.js';
 import '../TmpFile.js';
@@ -22,6 +22,23 @@ import { VirtualFile } from './VirtualFile.js';
 
 export class VirtualFileSystem {
   readonly allArchives: IArchive[] = [];
+  /** Parse rules/art once and hand out per-render copies. Long-lived workers enable this;
+   * one-shot CLI runs keep the plain parse path. */
+  CacheParsedInis = false;
+  private readonly parsedInis = new Map<string, IniFile>();
+
+  /** Cached parse-once INI access; callers own the returned file and may mutate it. */
+  openIni(filename: string): IniFile | null {
+    if (!this.CacheParsedInis) return this.open(filename, FileFormat.Ini) as IniFile | null;
+    const key = filename.toLowerCase();
+    let base: IniFile | null = this.parsedInis.get(key) ?? null;
+    if (base == null) {
+      base = this.open(filename, FileFormat.Ini) as IniFile | null;
+      if (base == null) return null;
+      this.parsedInis.set(key, base);
+    }
+    return base.clone();
+  }
 
   fileExists(filename: string): boolean {
     return this.allArchives.some((v) => v !== null && v.containsFile(filename));
@@ -212,6 +229,7 @@ export class VirtualFileSystem {
   reset(): void {
     for (const arch of this.allArchives) arch?.dispose();
     this.allArchives.length = 0;
+    this.parsedInis.clear();
   }
 
   dispose(): void {

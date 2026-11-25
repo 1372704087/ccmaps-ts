@@ -295,9 +295,9 @@ export class MapRenderer {
   LoadInis(): boolean {
     if (this._config.CustomRulesIniFiles.length === 0) {
       if (this._config.Engine === EngineType.YurisRevenge) {
-        this._rules = this._vfs.open('rulesmd.ini') as IniFile;
+        this._rules = this._vfs.openIni('rulesmd.ini') as IniFile;
       } else {
-        this._rules = this._vfs.open('rules.ini') as IniFile;
+        this._rules = this._vfs.openIni('rules.ini') as IniFile;
         if (this._rules != null && this._config.Engine === EngineType.Firestorm) {
           logger.info('Merging Firestorm rules with TS rules');
           this._rules.mergeWith(this._vfs.open('firestrm.ini') as IniFile);
@@ -309,9 +309,9 @@ export class MapRenderer {
 
     if (this._config.CustomArtIniFiles.length === 0) {
       if (this._config.Engine === EngineType.YurisRevenge) {
-        this._art = this._vfs.open('artmd.ini') as IniFile;
+        this._art = this._vfs.openIni('artmd.ini') as IniFile;
       } else {
-        this._art = this._vfs.open('art.ini') as IniFile;
+        this._art = this._vfs.openIni('art.ini') as IniFile;
         if (this._art != null && this._config.Engine === EngineType.Firestorm) {
           logger.info('Merging Firestorm art with TS art');
           this._art.mergeWith(this._vfs.open('artfs.ini') as IniFile);
@@ -349,14 +349,14 @@ export class MapRenderer {
   }
 
   private LoadCustomInis(fileNames: string[]): IniFile {
-    let ini = this._vfs.open(fileNames[0]) as IniFile;
+    let ini = this._vfs.openIni(fileNames[0]) as IniFile;
     if (ini == null) {
       logger.error(`Custom ini file ${fileNames[0]} could not be loaded`);
       return null as unknown as IniFile;
     }
     for (let i = 1; i < fileNames.length; i++) {
       logger.info(`Merging ${fileNames[i]} with ${fileNames[0]}`);
-      const extra = this._vfs.open(fileNames[i]) as IniFile;
+      const extra = this._vfs.openIni(fileNames[i]) as IniFile;
       if (extra == null) logger.warn(`Custom ini file ${fileNames[i]} could not be loaded, skipping`);
       ini.mergeWith(extra);
     }

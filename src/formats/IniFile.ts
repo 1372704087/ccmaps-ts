@@ -295,6 +295,40 @@ export class IniFile extends VirtualTextFile {
     }
   }
 
+  /** Per-render copy of a parsed file. The renderer merges the map's sections, Ares/Phobos
+   * includes and inheritance into the file it receives, so a long-lived process can only
+   * share a parsed base by handing out copies. */
+  clone(): IniFile {
+    const copy = Object.create(IniFile.prototype) as IniFile;
+    copy.baseStream = this.baseStream;
+    copy.baseOffset = this.baseOffset;
+    copy.size = this.size;
+    copy.pos = this.pos;
+    copy.isBuffered = this.isBuffered;
+    copy.fileName = this.fileName;
+
+    const sections: IniSection[] = [];
+    const byName = new Map<string, IniSection>();
+    let current: IniSection | null = null;
+    for (const src of this.Sections) {
+      const section = new IniSection(src.Name, src.Index);
+      section.AlreadyInherited = src.AlreadyInherited;
+      section.File = copy;
+      for (const pair of src.OrderedEntries) {
+        const value = IniValue.fromString(pair.Value.toString());
+        section.OrderedEntries.push({ Key: pair.Key, Value: value });
+        section.SortedEntries.set(pair.Key, value);
+      }
+      sections.push(section);
+      if (!byName.has(section.Name)) byName.set(section.Name, section);
+      if (src === this.CurrentSection) current = section;
+    }
+    copy.Sections = sections;
+    copy.CurrentSection = current;
+    copy.sectionsByName = byName;
+    return copy;
+  }
+
   loadAresIncludes(vfs: VirtualFileSystem): void {
     const includes = this.getOrCreateSection('#include');
     for (const entry of includes.OrderedEntries) {

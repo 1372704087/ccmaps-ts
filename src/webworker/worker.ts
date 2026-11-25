@@ -11,6 +11,7 @@ import type { Rectangle } from '../shared/Geometry.js';
 import type { MapStats } from '../engine/map/MapStats.js';
 import * as vfs from './fs-shim.js';
 import { bgrToRgba } from './bgr.js';
+import { VirtualFileSystem } from '../formats/vfs/VirtualFileSystem.js';
 
 interface RenderOptions {
   format?: 'png' | 'jpg';
@@ -51,15 +52,68 @@ function post(message: any): void {
 let rendering = false;
 let lastFatal = '';
 
+const GAME_DIR = '/game';
+/** Parsed archive indexes per (engine, expand setting). The worker outlives a single render,
+ * so the next map skips the game folder scan and the MIX header parse. */
+const vfsCache = new Map<string, VirtualFileSystem>();
+const MAX_CACHED_VFS = 2;
+
+function engineFromOptions(options: RenderOptions): EngineType {
+  switch (options.engine) {
+    case 'ra2': return EngineType.RedAlert2;
+    case 'yr': return EngineType.YurisRevenge;
+    case 'ts': return EngineType.TiberianSun;
+    case 'fs': return EngineType.Firestorm;
+    default: return EngineType.AutoDetect;
+  }
+}
+
+function gameVfs(engine: EngineType, noExpandMixes: boolean): VirtualFileSystem {
+  const key = `${engine}|${noExpandMixes ? 1 : 0}`;
+  const cached = vfsCache.get(key);
+  if (cached != null) {
+    // refresh LRU position
+    vfsCache.delete(key);
+    vfsCache.set(key, cached);
+    return cached;
+  }
+  const loaded = new VirtualFileSystem();
+  loaded.CacheParsedInis = true;
+  loaded.addItem(GAME_DIR);
+  loaded.loadMixes(GAME_DIR, engine, !noExpandMixes);
+  vfsCache.set(key, loaded);
+  while (vfsCache.size > MAX_CACHED_VFS) {
+    const oldest = vfsCache.keys().next().value as string;
+    const old = vfsCache.get(oldest);
+    vfsCache.delete(oldest);
+    try { old?.dispose(); } catch { /* ignore */ }
+  }
+  return loaded;
+}
+
+function clearVfsCache(): void {
+  for (const cached of vfsCache.values()) {
+    try { cached.dispose(); } catch { /* ignore */ }
+  }
+  vfsCache.clear();
+}
+
 logger.setLevel(LogLevel.Warn);
 logger.setSink((level, message) => {
   if (level >= LogLevel.Error) lastFatal = message;
   post({ type: 'log', level, message });
 });
 
-function makeSettings(settings: RenderSettings, options: RenderOptions, mapPath: string): void {
+function makeSettings(
+  settings: RenderSettings,
+  options: RenderOptions,
+  mapPath: string,
+  engine: EngineType,
+  assetVfs: VirtualFileSystem,
+): void {
   settings.InputFile = mapPath;
-  settings.MixFilesDirectories = ['/game'];
+  settings.MixFilesDirectories = [GAME_DIR];
+  settings.AssetVfs = assetVfs;
   settings.OutputFile = '';
   settings.OutputDir = '';
   settings.MetadataOutFile = '';
@@ -78,13 +132,7 @@ function makeSettings(settings: RenderSettings, options: RenderOptions, mapPath:
   settings.ReportProgress = true;
   settings.MaxSurfacePixels = options.maxPixels ?? 0;
 
-  switch (options.engine) {
-    case 'ra2': settings.Engine = EngineType.RedAlert2; break;
-    case 'yr': settings.Engine = EngineType.YurisRevenge; break;
-    case 'ts': settings.Engine = EngineType.TiberianSun; break;
-    case 'fs': settings.Engine = EngineType.Firestorm; break;
-    default: settings.Engine = EngineType.AutoDetect; break;
-  }
+  settings.Engine = engine;
   switch (options.sizeMode) {
     case 'local': settings.SizeMode = SizeMode.Local; break;
     case 'full': settings.SizeMode = SizeMode.Full; break;
@@ -161,9 +209,15 @@ async function handleRender(req: RenderRequest): Promise<void> {
     const mapPath = '/maps/' + mapName;
     vfs.mountFile(mapPath, req.mapFile);
 
-    const engine = new RenderEngine();
+    const explicitEngine = engineFromOptions(req.options ?? {});
+    const engine = explicitEngine === EngineType.AutoDetect
+      ? RenderEngine.detectEngine(vfs.readFileSync(mapPath), [GAME_DIR])
+      : explicitEngine;
+    const assetVfs = gameVfs(engine, !!req.options?.noExpandMixes);
+
+    const engineInstance = new RenderEngine();
     const settings = new RenderSettings();
-    makeSettings(settings, req.options ?? {}, mapPath);
+    makeSettings(settings, req.options ?? {}, mapPath, engine, assetVfs);
     settings.ProgressSink = (percent, phase) => post({ type: 'progress', id: req.id, percent, phase });
     let captured: { surface: DrawingSurface; rect: Rectangle } | null = null;
     const output: { value: { surface: DrawingSurface; rect: Rectangle } | null } = { value: null };
@@ -171,7 +225,7 @@ async function handleRender(req: RenderRequest): Promise<void> {
     let stats: ReturnType<MapStats['toPlainObject']> | null = null;
     settings.StatsSink = (value) => { stats = value.toPlainObject(); };
 
-    const result = engine.Render(settings);
+    const result = engineInstance.Render(settings);
     captured = output.value;
     if (result !== EngineResult.RenderedOk || captured == null) {
       const missingAssets = /rules or art|theater|game data|mix file directory|initialize map/i.test(lastFatal);
@@ -192,7 +246,7 @@ async function handleRender(req: RenderRequest): Promise<void> {
       width: captured.rect.Width,
       height: captured.rect.Height,
       name: mapNameWithoutExt(mapName) + (format === 'jpg' ? '.jpg' : '.png'),
-      engine: engine.LastEngine == null ? 'auto' : EngineType[engine.LastEngine],
+      engine: engineInstance.LastEngine == null ? 'auto' : EngineType[engineInstance.LastEngine],
       stats,
     });
   } catch (e: any) {
@@ -207,6 +261,8 @@ scope.onmessage = (event: MessageEvent) => {
   const msg = event.data;
   if (!msg || typeof msg !== 'object') return;
   if (msg.type === 'assets') {
+    // new game files invalidate every archive list parsed from the old ones
+    clearVfsCache();
     vfs.reset();
     let count = 0;
     for (const file of msg.files || []) {

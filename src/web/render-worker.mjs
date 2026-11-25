@@ -52,6 +52,7 @@ function gameVfs(job, engine) {
     return cached;
   }
   const vfs = new VirtualFileSystem();
+  vfs.CacheParsedInis = true;
   for (const dir of job.mixDirs) if (dir) vfs.addItem(dir);
   vfs.loadMixes(job.mixDirs[0] || '', engine, !job.noExpandMixes);
   vfsCache.set(key, vfs);

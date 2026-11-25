@@ -51,9 +51,20 @@ const M_RAW_LEN = 7;
 const M_COMPRESSED_LEN = 8;
 
 function entryUrl(): string {
-  const base = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
-  const file = path.resolve(base, 'engine', 'render', 'bandWorkerMain.js');
-  return 'file:///' + file.replace(/\\/g, '/');
+  const relatives = [
+    path.join('engine', 'render', 'bandWorkerMain.js'),
+    path.join('dist', 'engine', 'render', 'bandWorkerMain.js'),
+  ];
+  const start = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
+  for (const relative of relatives) {
+    let dir = start;
+    for (let i = 0; i < 6; i++) {
+      const candidate = path.join(dir, relative);
+      if (fs.existsSync(candidate)) return 'file:///' + candidate.replace(/\\/g, '/');
+      dir = path.dirname(dir);
+    }
+  }
+  return 'file:///' + path.resolve(process.cwd(), relatives[0]).replace(/\\/g, '/');
 }
 
 function report(settings: RenderSettings, last: { pct: number }, pct: number, phase: string): void {
@@ -74,7 +85,10 @@ export function runParallelStream(req: ParallelStreamRequest): void {
   const control = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * (2 + workerCount));
   const ctl = new Int32Array(control);
   const metadataFile = settings.MetadataOutFile;
-  const snapshot = JSON.parse(JSON.stringify(settings, (key, value) => (typeof value === 'function' ? undefined : value))) as Record<string, unknown>;
+  const snapshot = JSON.parse(JSON.stringify(settings, (key, value) => {
+    if (key === 'AssetVfs' || typeof value === 'function') return undefined;
+    return value;
+  })) as Record<string, unknown>;
   snapshot.BandJob = null;
 
   const workers: Worker[] = [];

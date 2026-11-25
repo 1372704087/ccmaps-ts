@@ -16,6 +16,7 @@ import { EngineType, EngineResult, StartPositionMarking } from '../shared/Enums.
 import { Rectangle } from '../shared/Geometry.js';
 import { PngWriter } from '../rendering/PngWriter.js';
 import { decodePng, pixelHash } from '../rendering/PngReader.js';
+import { VirtualFileSystem } from '../formats/vfs/VirtualFileSystem.js';
 import { RenderEngine } from './RenderEngine.js';
 
 // dist/engine/GoldenRender.test.js -> repository root
@@ -111,6 +112,27 @@ test('Golden: repeated in-process renders stay golden', { skip: skipRa2 }, () =>
   assertGolden('mp22s8-png', pixelHash(path.join(other, 'render.png')), other);
   const again = render('hillbtwn.map', mixDir!);
   assertGolden('hillbtwn-png', pixelHash(path.join(again, 'render.png')), again);
+});
+
+test('Cached game VFS reproduces a fresh render', { skip: skipRa2 }, () => {
+  // The render workers parse rules/art once and hand every map a copy: merging the map's own
+  // sections must never leak into the cached base.
+  const vfs = new VirtualFileSystem();
+  vfs.CacheParsedInis = true;
+  vfs.addItem(mixDir!);
+  vfs.loadMixes(mixDir!, EngineType.YurisRevenge, true);
+  const viaCache = (map: string): string => {
+    const dir = render(map, mixDir!, (s) => { s.AssetVfs = vfs; s.Engine = EngineType.YurisRevenge; });
+    return pixelHash(path.join(dir, 'render.png'));
+  };
+  const fresh = (map: string): string => {
+    const dir = render(map, mixDir!, (s) => { s.Engine = EngineType.YurisRevenge; });
+    return pixelHash(path.join(dir, 'render.png'));
+  };
+
+  assert.equal(viaCache('hillbtwn.map'), fresh('hillbtwn.map'));
+  assert.equal(viaCache('mp22s8.map'), fresh('mp22s8.map'));
+  assert.equal(viaCache('hillbtwn.map'), fresh('hillbtwn.map'));
 });
 
 // Data-independent: validates the PNG decode + hash that the golden comparisons rely on, so a
