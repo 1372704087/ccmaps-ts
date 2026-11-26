@@ -1371,12 +1371,19 @@
     // must not be fed to the too-large guard.
     const dims = item.previewUrl || item.previewOnly ? null : { w: item.width, h: item.height };
     const previewOnly = Boolean(item.previewOnly);
-    currentImage = { url: src, name: item.name, downloadUrl: item.downloadUrl };
+    // The persisted blob of a preview-only item is the 4K preview, so the download stays
+    // usable but is named <name>.preview.png instead of pretending to be the full render.
+    const downloadUrl = previewOnly ? item.url : item.downloadUrl;
+    const downloadName = previewOnly
+      ? item.name.replace(/\.(png|jpe?g)$/i, '') + '.preview.png'
+      : item.name;
+    currentImage = { url: src, name: item.name, downloadUrl };
     showPreview(src, item.name, dims);
-    els.downloadBtn.disabled = previewOnly;
+    els.downloadBtn.disabled = false;
     els.downloadBtn.title = previewOnly ? t('previewOnlyHint') : '';
-    els.downloadBtn.dataset.url = previewOnly ? '' : item.downloadUrl;
-    els.downloadBtn.dataset.name = item.name;
+    els.downloadBtn.dataset.previewOnly = previewOnly ? '1' : '';
+    els.downloadBtn.dataset.url = downloadUrl;
+    els.downloadBtn.dataset.name = downloadName;
     els.previewMeta.textContent = previewOnly ? item.name + ' · ' + t('previewOnlyHint') : item.name;
     renderHistoryList();
   }
@@ -1675,6 +1682,7 @@
     addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues, { w: res.width, h: res.height });
     els.downloadBtn.disabled = false;
     els.downloadBtn.title = '';
+    els.downloadBtn.dataset.previewOnly = '';
     els.downloadBtn.dataset.url = blobUrl;
     els.downloadBtn.dataset.name = res.name;
     const ms = Date.now() - (renderStart || Date.now());
@@ -1964,6 +1972,7 @@
               setMapStats(selectedMap, evt.meta);
               els.downloadBtn.disabled = false;
               els.downloadBtn.title = '';
+              els.downloadBtn.dataset.previewOnly = '';
               els.downloadBtn.dataset.url = evt.downloadUrl;
               els.downloadBtn.dataset.name = evt.name;
               const ms = Date.now() - (renderStart || Date.now());
@@ -2873,6 +2882,9 @@
     const url = els.downloadBtn.dataset.url || (currentImage && currentImage.downloadUrl);
     const name = els.downloadBtn.dataset.name || (currentImage && currentImage.name) || 'render';
     if (url) {
+      // Restored big renders only keep the downscaled preview; say so instead of silently
+      // handing out a smaller file under the original name.
+      if (els.downloadBtn.dataset.previewOnly === '1') toast(t('previewOnlyHint'), 'warn');
       const a = document.createElement('a');
       a.href = url;
       a.download = name;
