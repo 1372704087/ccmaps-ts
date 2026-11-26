@@ -28,6 +28,11 @@ export class RenderSettings {
   SizeMode: SizeMode = SizeMode.Auto;
   /** Downscale the saved PNG to this width; 0 keeps the full render size. */
   PreviewWidth = 0;
+  /** Extra downscaled PNG written next to large renders. Browsers cannot decode
+   * multi-hundred-megapixel images, so the web UI shows this file instead. Empty = off. */
+  PreviewImageFile = '';
+  /** Width of that preview (aspect preserved); images already this narrow get no extra file. */
+  PreviewImageWidth = 3840;
   /** Output framing is applied to the selected size rect before scaling. Crop values are
    * fractions of that rect, so they survive Local/Full size changes. */
   CropX = 0;
@@ -214,6 +219,13 @@ export class RenderSettings {
     registerValue(['--preview-width'], 'Downscale the saved image to this pixel width (0 = full render size, max 8192)', (v) => {
       const n = parseInt(v, 10);
       this.PreviewWidth = Number.isFinite(n) ? Math.min(8192, Math.max(0, n)) : 0;
+    });
+    registerValue(['--preview-image'], 'Also write a downscaled PNG preview to this path for renders wider than --preview-image-width', (v) => {
+      this.PreviewImageFile = v;
+    });
+    registerValue(['--preview-image-width'], 'Width of the extra preview image (default 3840, max 8192)', (v) => {
+      const n = parseInt(v, 10);
+      this.PreviewImageWidth = Number.isFinite(n) ? Math.min(8192, Math.max(256, n)) : 3840;
     });
     registerValue(['--band-height'], 'Draw the map in strips of this many pixels and downscale each strip into the preview (0 = strip only when the full canvas exceeds the budget, -1 = never strip)', (v) => {
       const n = parseInt(v, 10);

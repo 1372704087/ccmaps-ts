@@ -66,6 +66,10 @@
   const renderHistory = [];
   let historySeq = 0;
   const MAX_HISTORY = 12;
+  // 浏览器无法可靠解码超大位图（2 亿像素级的渲染图会解码失败或整块黑屏），
+  // 超过该尺寸时不在预览区加载原图，改为提示用户直接下载。
+  const PREVIEW_MAX_PIXELS = 64 * 1024 * 1024;
+  const PREVIEW_MAX_SIDE = 16384;
   const THUMB_W = 240;
   const THUMB_H = 120;
   let mapInfoCache = new Map();
@@ -1201,7 +1205,26 @@
     if (!els.renderLog.hidden) els.renderLog.open = true;
   }
 
-  function showPreview(url, meta) {
+  function previewTooLarge(w, h) {
+    return w > 0 && h > 0 && (w * h > PREVIEW_MAX_PIXELS || w > PREVIEW_MAX_SIDE || h > PREVIEW_MAX_SIDE);
+  }
+
+  function showPreviewUnavailable(w, h) {
+    els.previewImg.style.display = 'none';
+    els.previewImg.removeAttribute('src');
+    els.placeholder.style.display = '';
+    const ph = els.placeholder.querySelector('p');
+    if (ph) ph.textContent = w > 0 && h > 0
+      ? tf('previewTooLargeDims', { size: w + '×' + h })
+      : t('previewTooLarge');
+  }
+
+  function showPreview(url, meta, dims) {
+    if (dims && previewTooLarge(Number(dims.w) || 0, Number(dims.h) || 0)) {
+      showPreviewUnavailable(Number(dims.w) || 0, Number(dims.h) || 0);
+      if (meta) els.previewMeta.textContent = meta;
+      return;
+    }
     const ph = els.placeholder.querySelector('p');
     if (ph) ph.textContent = t('previewPlaceholder');
     els.previewImg.onload = () => {
@@ -1211,20 +1234,30 @@
       void els.previewImg.offsetWidth;
       els.previewImg.classList.add('swap-in');
     };
+    els.previewImg.onerror = () => {
+      els.previewImg.onerror = null;
+      showPreviewUnavailable(0, 0);
+    };
     els.previewImg.src = url.startsWith('blob:') ? url : url + '?t=' + Date.now();
     if (meta) els.previewMeta.textContent = meta;
   }
 
-  function addRenderHistory(url, downloadUrl, name, blob, values) {
+  function addRenderHistory(url, downloadUrl, name, blob, values, dims) {
     if (!url) return;
+    const width = dims && Number(dims.w) > 0 ? Number(dims.w) : null;
+    const height = dims && Number(dims.h) > 0 ? Number(dims.h) : null;
+    const previewUrl = (dims && dims.previewUrl) || null;
     const existing = renderHistory.find((h) => h.url === url);
     if (existing) {
       existing.name = name || existing.name;
       if (values) existing.values = values;
+      if (width) existing.width = width;
+      if (height) existing.height = height;
+      if (previewUrl) existing.previewUrl = previewUrl;
       renderHistoryList();
       return;
     }
-    const item = { id: ++historySeq, dbId: null, url, downloadUrl: downloadUrl || url, name: name || '', values: values || null, at: Date.now(), thumbUrl: null };
+    const item = { id: ++historySeq, dbId: null, url, downloadUrl: downloadUrl || url, name: name || '', values: values || null, at: Date.now(), thumbUrl: null, width, height, previewUrl };
     renderHistory.unshift(item);
     if (blob) attachHistoryThumb(item, blob);
     while (renderHistory.length > MAX_HISTORY) {
@@ -1292,13 +1325,17 @@
   async function persistRenderHistoryItem(item, blob, sourceUrl) {
     try {
       let imageBlob = blob;
-      if (!imageBlob && sourceUrl) {
-        const resp = await fetch(sourceUrl);
+      // Prefer the downscaled server preview: the full image can be hundreds of MB and
+      // decoding it just to build a thumbnail fails in most browsers.
+      const fetchUrl = item.previewUrl || sourceUrl;
+      if (!imageBlob && fetchUrl) {
+        const resp = await fetch(fetchUrl);
         if (resp.ok) imageBlob = await resp.blob();
       }
       if (!imageBlob || !renderHistory.includes(item)) return;
       attachHistoryThumb(item, imageBlob);
-      if (!item.url.startsWith('blob:')) {
+      // A downscaled preview must not replace the original download URL.
+      if (!item.previewUrl && !item.url.startsWith('blob:')) {
         const oldUrl = item.url;
         const newUrl = URL.createObjectURL(imageBlob);
         item.url = newUrl;
@@ -1324,8 +1361,9 @@
   }
 
   function selectHistoryItem(item) {
-    currentImage = { url: item.url, name: item.name, downloadUrl: item.downloadUrl };
-    showPreview(item.url, item.name);
+    const src = item.previewUrl || item.url;
+    currentImage = { url: src, name: item.name, downloadUrl: item.downloadUrl };
+    showPreview(src, item.name, item.previewUrl ? null : { w: item.width, h: item.height });
     els.downloadBtn.disabled = false;
     els.downloadBtn.dataset.url = item.downloadUrl;
     els.downloadBtn.dataset.name = item.name;
@@ -1357,7 +1395,8 @@
     for (const item of renderHistory) {
       const meta = historyMeta(item);
       const wrap = document.createElement('div');
-      wrap.className = 'rh-item' + (currentImage && currentImage.url === item.url ? ' active' : '');
+      const active = currentImage && (currentImage.url === item.url || currentImage.url === item.previewUrl);
+      wrap.className = 'rh-item' + (active ? ' active' : '');
       wrap.dataset.hid = String(item.id);
       wrap.title = item.name + (meta ? ' · ' + meta : '');
       const btn = document.createElement('button');
@@ -1365,11 +1404,13 @@
       btn.className = 'rh-pick';
       btn.title = wrap.title;
       const img = document.createElement('img');
+      // Only the generated 240x120 thumbnail goes into the strip: pointing it at the 4K preview
+      // would decode a multi-megapixel image per card just to fill this small box.
       if (item.thumbUrl) img.src = item.thumbUrl;
       img.alt = item.name;
       img.loading = 'lazy';
       img.decoding = 'async';
-      img.onerror = () => removeHistoryItem(item.id);
+      img.onerror = () => { img.onerror = null; img.removeAttribute('src'); };
       const name = document.createElement('span');
       name.className = 'rh-name';
       name.textContent = item.name;
@@ -1499,11 +1540,11 @@
 
   function navigateHistory(delta) {
     if (!renderHistory.length) return;
-    let idx = renderHistory.findIndex((h) => currentImage && h.url === currentImage.url);
+    let idx = renderHistory.findIndex((h) => currentImage && (h.url === currentImage.url || h.previewUrl === currentImage.url));
     if (idx === -1) idx = 0;
     const next = renderHistory[(idx + delta + renderHistory.length) % renderHistory.length];
     selectHistoryItem(next);
-    if (!els.lightbox.hidden) openLightbox(next.url, next.name, next.downloadUrl);
+    if (!els.lightbox.hidden) openLightbox(next.previewUrl || next.url, next.name, next.downloadUrl);
   }
 
   // ---- lightbox zoom / pan ----
@@ -1619,9 +1660,9 @@
     setProgress(100, t('complete'), () => t('complete'));
     blobUrl = URL.createObjectURL(res.blob);
     currentImage = { url: blobUrl, name: res.name, downloadUrl: blobUrl };
-    showPreview(blobUrl, res.name);
+    showPreview(blobUrl, res.name, { w: res.width, h: res.height });
     setMapStats(selectedMap, res.stats);
-    addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues);
+    addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues, { w: res.width, h: res.height });
     els.downloadBtn.disabled = false;
     els.downloadBtn.dataset.url = blobUrl;
     els.downloadBtn.dataset.name = res.name;
@@ -1901,9 +1942,13 @@
                   els.previewMeta.textContent = evt.name;
                 }
               } else {
-                currentImage = { url: evt.url, name: evt.name, downloadUrl: evt.downloadUrl };
-                showPreview(evt.url, evt.name);
-                addRenderHistory(evt.url, evt.downloadUrl, evt.name, null, renderValues);
+                const doneW = evt.meta && Number(evt.meta.renderedWidth);
+                const doneH = evt.meta && Number(evt.meta.renderedHeight);
+                // Large renders come with a downscaled preview; the download stays full size.
+                const previewSrc = evt.previewUrl || evt.url;
+                currentImage = { url: previewSrc, name: evt.name, downloadUrl: evt.downloadUrl };
+                showPreview(previewSrc, evt.name, evt.previewUrl ? null : { w: doneW, h: doneH });
+                addRenderHistory(evt.url, evt.downloadUrl, evt.name, null, renderValues, { w: doneW, h: doneH, previewUrl: evt.previewUrl });
               }
               setMapStats(selectedMap, evt.meta);
               els.downloadBtn.disabled = false;

@@ -175,6 +175,8 @@ window.CNCMAPS_I18N.de = {
   "prevTitle": "Vorschau",
   "previewPlaceholder": "Die Kartenvorschau erscheint nach dem Rendern",
   "previewAlt": "Kartenvorschau",
+  "previewTooLarge": "Das Bild ist zu groß für die Browser-Vorschau; bitte direkt herunterladen",
+  "previewTooLargeDims": "Bild zu groß ({size}) für die Browser-Vorschau; bitte direkt herunterladen",
   "downloadImg": "Bild herunterladen",
   "previewTip": "Vorschau anklicken zum Vergrößern",
   "statusReady": "Bereit",

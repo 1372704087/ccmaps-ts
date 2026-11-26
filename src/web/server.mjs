@@ -423,6 +423,10 @@ function buildArgs(p) {
   args.push('--progress'); // emit progress:N:phase lines for the UI
   const metaFile = path.join(jobDir, 'meta.json');
   args.push('--meta-json=' + metaFile);
+  // Browsers cannot decode multi-hundred-megapixel PNGs, so the CLI writes a downscaled
+  // copy next to the full-size image; the UI shows this instead of a black canvas.
+  const previewFile = path.join(jobDir, 'preview.png');
+  if (fmt !== 'psd') args.push('--preview-image=' + previewFile);
 
   const ext = fmt === 'jpg' ? '.jpg' : (fmt === 'psd' ? '.psd' : '.png');
   const outFile = path.join(jobDir, 'render' + ext);
@@ -465,6 +469,7 @@ function buildArgs(p) {
     renderMemoryMb,
     parallelWorkers,
     metadataFile: metaFile,
+    previewFile,
   };
   return {
     args,
@@ -473,6 +478,7 @@ function buildArgs(p) {
     fmt,
     outFile,
     metaFile,
+    previewFile,
     uploadFile: infile,
     token,
     engine: p.engine || 'auto',
@@ -591,24 +597,31 @@ async function finishSuccess(record) {
       file: job.outFile, size: mainStat.size, name: job.name, mime: job.mime, at: Date.now(),
     });
     record.keepDir = true;
-    if (RESULT_CACHE && job.cacheKey) {
-      resultCache.set(job.cacheKey, { token: job.token, meta, at: Date.now() });
-      resultTokenKeys.set(job.token, job.cacheKey);
-    }
+    // PSD writes its own flattened PNG; PNG/JPEG jobs get the engine's downscaled preview
+    // (only produced for images too large for a browser to decode).
     let previewUrl = null;
-    if (job.fmt === 'psd') {
-      const previewFile = job.outFile.replace(/\.psd$/i, '') + '.preview.png';
+    let previewToken = null;
+    const previewFile = job.fmt === 'psd'
+      ? job.outFile.replace(/\.psd$/i, '') + '.preview.png'
+      : (job.previewFile || '');
+    if (previewFile) {
       try {
         if (fs.existsSync(previewFile)) {
           const previewStat = await fs.promises.stat(previewFile);
-          const previewToken = job.token + 'p';
-          const previewName = job.name.replace(/\.psd$/i, '') + '.png';
+          previewToken = job.token + 'p';
+          const previewName = job.fmt === 'psd'
+            ? job.name.replace(/\.psd$/i, '') + '.png'
+            : job.name;
           cachePut(previewToken, {
             file: previewFile, size: previewStat.size, name: previewName, mime: 'image/png', at: Date.now(),
           });
           previewUrl = '/image/' + previewToken;
         }
-      } catch { /* the preview is optional; the PSD download still works */ }
+      } catch { /* the preview is optional; the download still works */ }
+    }
+    if (RESULT_CACHE && job.cacheKey) {
+      resultCache.set(job.cacheKey, { token: job.token, meta, previewToken, at: Date.now() });
+      resultTokenKeys.set(job.token, job.cacheKey);
     }
     finishRenderJob(record, {
       type: 'done', ok: true, url: job.url, downloadUrl: job.downloadUrl, name: job.name,
@@ -879,6 +892,10 @@ function serveFromResultCache(record) {
     fs.copyFileSync(image.file, job.outFile);
     if (job.metaFile && entry.meta != null) {
       fs.writeFileSync(job.metaFile, JSON.stringify(entry.meta));
+    }
+    if (entry.previewToken && job.previewFile) {
+      const preview = cacheGet(entry.previewToken);
+      if (preview) fs.copyFileSync(preview.file, job.previewFile);
     }
   } catch {
     try { fs.unlinkSync(job.outFile); } catch { /* ignore */ }

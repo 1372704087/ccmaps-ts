@@ -352,6 +352,7 @@ export class RenderEngine {
       settings.OutputSink(outputSurface, outputRect);
     } else {
       RenderEngine.saveImage(outputSurface, outPath, settings, outputRect);
+      RenderEngine.writePreviewImage(outputSurface, outputRect, settings);
       logger.info(`Saved ${outPath}`);
     }
 
@@ -457,6 +458,10 @@ export class RenderEngine {
     const bandBottom = Math.min(fullRect.Bottom, sizeRect.Bottom);
 
     if (settings.ParallelWorkers > 1) {
+      if (settings.PreviewImageFile !== '') {
+        logger.warn('The extra preview image is skipped when strips are drawn by worker threads '
+          + '(set --parallel-workers=1 to generate it)');
+      }
       logger.info(
         `Streaming ${sizeRect.Width}x${sizeRect.Height} PNG in strips of ${bandHeight}px ` +
           `on ${settings.ParallelWorkers} worker threads`,
@@ -475,6 +480,15 @@ export class RenderEngine {
     const writer = new PngStreamWriter(outPath, sizeRect.Width, sizeRect.Height, 3, settings.PNGQuality);
     const top0 = Math.max(0, sizeRect.Top);
     const bottom = bandBottom;
+    // Accumulate the browser preview while the strips are drawn: the full image never fits in
+    // memory, but the downscaled one does.
+    const previewCanvas = settings.PreviewImageFile !== '' && sizeRect.Width > settings.PreviewImageWidth
+      ? new DrawingSurface(
+          settings.PreviewImageWidth,
+          Math.max(1, Math.round((sizeRect.Height * settings.PreviewImageWidth) / sizeRect.Width)),
+          SurfaceFormat.Bgr24,
+        )
+      : null;
     try {
       for (let top = top0; top < bottom; top += bandHeight) {
         const height = Math.min(bandHeight, bottom - top);
@@ -492,6 +506,7 @@ export class RenderEngine {
         if (lastLocal > firstLocal) {
           writer.writeRows(surface.data, surface.Width, sizeRect.Left, firstLocal, lastLocal - firstLocal);
         }
+        if (previewCanvas) RenderEngine.pastePreviewBand(previewCanvas, surface, sizeRect, top, height);
         renderer.ReleaseDrawingSurface();
       }
       writer.finish();
@@ -499,6 +514,14 @@ export class RenderEngine {
       writer.abort();
       renderer.FreeUseless();
       throw e;
+    }
+    if (previewCanvas) {
+      try {
+        RenderEngine.savePreviewSurface(previewCanvas, settings);
+      } catch (e) {
+        // The full-size image is already written; a preview failure must not fail the render.
+        logger.warn(`Could not write the preview image: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     logger.info(`Saved ${outPath}`);
     renderer.Progress?.Report(100, 'done');
@@ -749,8 +772,58 @@ export class RenderEngine {
     }
 
     save(canvas);
+    RenderEngine.writePreviewImage(canvas, new Rectangle(0, 0, canvas.Width, canvas.Height), settings);
     logger.info(`Saved preview (${canvas.Width}x${canvas.Height})`);
     return new Rectangle(0, 0, canvas.Width, canvas.Height);
+  }
+
+  /** Writes the extra downscaled preview the web UI shows for very large renders. Browsers
+   * cannot decode a multi-hundred-megapixel PNG, so the client gets a ≤ PreviewImageWidth copy
+   * while the download stays full size. No-op when the image is already narrow enough. */
+  private static writePreviewImage(surface: DrawingSurface, rect: Rectangle, settings: RenderSettings): void {
+    if (settings.PreviewImageFile === '' || rect.Width <= 0 || rect.Height <= 0) return;
+    const targetWidth = Math.min(settings.PreviewImageWidth, rect.Width);
+    if (targetWidth >= rect.Width) return;
+    try {
+      const targetHeight = Math.max(1, Math.round((rect.Height * targetWidth) / rect.Width));
+      const preview = resizeRegionBox(surface, rect, targetWidth, targetHeight);
+      RenderEngine.savePreviewSurface(preview, settings);
+    } catch (e) {
+      logger.warn(`Could not write the preview image: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  private static savePreviewSurface(preview: DrawingSurface, settings: RenderSettings): void {
+    fs.mkdirSync(path.dirname(settings.PreviewImageFile), { recursive: true });
+    preview.savePNG(settings.PreviewImageFile, settings.PNGQuality, 0, 0, preview.Width, preview.Height);
+    logger.info(`Saved preview ${preview.Width}x${preview.Height} to ${settings.PreviewImageFile}`);
+  }
+
+  /** Pastes one streamed strip into the downscaled preview canvas, sampling the same source
+   * rows the single-canvas box filter would use. */
+  private static pastePreviewBand(canvas: DrawingSurface, surface: DrawingSurface, rect: Rectangle, top: number, height: number): void {
+    const ratio = rect.Height / canvas.Height;
+    const dstTop = Math.round((top - rect.Top) / ratio);
+    const dstBottom = Math.round((top + height - rect.Top) / ratio);
+    const dstHeight = Math.max(1, dstBottom - dstTop);
+    const localTop = Math.max(0, Math.round(dstTop * ratio) - (top - rect.Top));
+    const localHeight = Math.max(1, Math.min(height - localTop, Math.round(dstHeight * ratio)));
+    if (localTop >= height || localHeight <= 0) return;
+    const scaled = resizeRegionBox(
+      surface,
+      new Rectangle(rect.Left, localTop, rect.Width, localHeight),
+      canvas.Width,
+      dstHeight,
+    );
+    const rowBytes = scaled.Width * 3;
+    const y0 = Math.max(0, -dstTop);
+    const y1 = Math.min(scaled.Height, canvas.Height - dstTop);
+    for (let y = y0; y < y1; y++) {
+      canvas.data.set(
+        scaled.data.subarray(y * rowBytes, (y + 1) * rowBytes),
+        ((dstTop + y) * canvas.Width) * 3,
+      );
+    }
   }
 
   /// <summary>Resolves the output image path (PNG unless JPEG was explicitly requested).</summary>
