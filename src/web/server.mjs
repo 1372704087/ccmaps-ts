@@ -47,7 +47,10 @@ const UPLOAD_MAX_FILES = 200;
 const UPLOAD_MAX_TOTAL_BYTES = clampInt(process.env.CNCMAPS_MAX_UPLOAD_BYTES, 64 * 1024 * 1024, 16 * 1024 * 1024 * 1024, 1024 * 1024 * 1024);
 const IMAGE_TTL_MS = 30 * 60 * 1000;
 const IMAGE_MAX = 16;
-const IMAGE_MAX_BYTES = clampInt(process.env.CNCMAPS_IMAGE_CACHE_BYTES, 16 * 1024 * 1024, 4 * 1024 * 1024 * 1024, 256 * 1024 * 1024);
+// A 500x500 map renders to a ~250 MB PNG; its downscaled preview adds ~10-15 MB. A 256 MB
+// budget made the preview insertion evict the full-size image it belongs to, which broke both
+// the download and the preview of the newest render.
+const IMAGE_MAX_BYTES = clampInt(process.env.CNCMAPS_IMAGE_CACHE_BYTES, 16 * 1024 * 1024, 4 * 1024 * 1024 * 1024, 1024 * 1024 * 1024);
 const RENDER_QUEUE_MAX = clampInt(process.env.CNCMAPS_RENDER_QUEUE_MAX, 1, 1024, 64);
 // Opt-in: when the same map bytes are rendered again with identical parameters, copy the
 // previously produced image instead of rendering it again. Off unless explicitly enabled.

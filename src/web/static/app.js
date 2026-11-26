@@ -1345,7 +1345,12 @@
         }
         renderHistoryList();
       }
-      item.dbId = await saveRenderRecord(item.name, imageBlob, item.values);
+      item.dbId = await saveRenderRecord(item.name, imageBlob, item.values, {
+        width: item.width,
+        height: item.height,
+        // The stored blob is the downscaled server preview, not the full-size render.
+        previewOnly: Boolean(item.previewUrl),
+      });
     } catch (e) { /* persistence is best-effort */ }
   }
 
@@ -1362,12 +1367,17 @@
 
   function selectHistoryItem(item) {
     const src = item.previewUrl || item.url;
+    // A restored preview-only item shows the downscaled image, so its full-size dimensions
+    // must not be fed to the too-large guard.
+    const dims = item.previewUrl || item.previewOnly ? null : { w: item.width, h: item.height };
+    const previewOnly = Boolean(item.previewOnly);
     currentImage = { url: src, name: item.name, downloadUrl: item.downloadUrl };
-    showPreview(src, item.name, item.previewUrl ? null : { w: item.width, h: item.height });
-    els.downloadBtn.disabled = false;
-    els.downloadBtn.dataset.url = item.downloadUrl;
+    showPreview(src, item.name, dims);
+    els.downloadBtn.disabled = previewOnly;
+    els.downloadBtn.title = previewOnly ? t('previewOnlyHint') : '';
+    els.downloadBtn.dataset.url = previewOnly ? '' : item.downloadUrl;
     els.downloadBtn.dataset.name = item.name;
-    els.previewMeta.textContent = item.name;
+    els.previewMeta.textContent = previewOnly ? item.name + ' · ' + t('previewOnlyHint') : item.name;
     renderHistoryList();
   }
 
@@ -1398,7 +1408,7 @@
       const active = currentImage && (currentImage.url === item.url || currentImage.url === item.previewUrl);
       wrap.className = 'rh-item' + (active ? ' active' : '');
       wrap.dataset.hid = String(item.id);
-      wrap.title = item.name + (meta ? ' · ' + meta : '');
+      wrap.title = item.name + (meta ? ' · ' + meta : '') + (item.previewOnly ? ' · ' + t('previewOnlyHint') : '');
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'rh-pick';
@@ -1664,6 +1674,7 @@
     setMapStats(selectedMap, res.stats);
     addRenderHistory(blobUrl, blobUrl, res.name, res.blob, renderValues, { w: res.width, h: res.height });
     els.downloadBtn.disabled = false;
+    els.downloadBtn.title = '';
     els.downloadBtn.dataset.url = blobUrl;
     els.downloadBtn.dataset.name = res.name;
     const ms = Date.now() - (renderStart || Date.now());
@@ -1952,6 +1963,7 @@
               }
               setMapStats(selectedMap, evt.meta);
               els.downloadBtn.disabled = false;
+              els.downloadBtn.title = '';
               els.downloadBtn.dataset.url = evt.downloadUrl;
               els.downloadBtn.dataset.name = evt.name;
               const ms = Date.now() - (renderStart || Date.now());
@@ -2600,7 +2612,7 @@
     } catch (e) { /* ignore missing queue */ }
   }
 
-  async function saveRenderRecord(name, blob, values) {
+  async function saveRenderRecord(name, blob, values, meta) {
     if (!blob || blob.size > MAX_PERSIST_BYTES) return null;
     try {
       // Estimating storage lets us skip persistence instead of filling the origin
@@ -2612,7 +2624,15 @@
       const db = await openGameDb();
       const id = await new Promise((resolve, reject) => {
         const tx = db.transaction(RENDER_STORE, 'readwrite');
-        const rq = tx.objectStore(RENDER_STORE).add({ name, blob, values: values || null, createdAt: Date.now() });
+        const rq = tx.objectStore(RENDER_STORE).add({
+          name,
+          blob,
+          values: values || null,
+          createdAt: Date.now(),
+          width: meta && meta.width ? meta.width : null,
+          height: meta && meta.height ? meta.height : null,
+          previewOnly: Boolean(meta && meta.previewOnly),
+        });
         rq.onsuccess = () => resolve(rq.result);
         rq.onerror = () => reject(rq.error);
       });
@@ -2695,6 +2715,10 @@
           values: record.values || null,
           at: record.createdAt || Date.now(),
           thumbUrl: null,
+          width: record.width || null,
+          height: record.height || null,
+          // Older records have no flag; their blob is whatever was persisted at the time.
+          previewOnly: Boolean(record.previewOnly),
         };
         renderHistory.unshift(item);
         restored.push({ item, blob: record.blob });

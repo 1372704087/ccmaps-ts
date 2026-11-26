@@ -177,6 +177,7 @@ window.CNCMAPS_I18N.ja = {
   "previewAlt": "マッププレビュー",
   "previewTooLarge": "画像が大きすぎるためブラウザでプレビューできません。直接ダウンロードしてください",
   "previewTooLargeDims": "画像が大きすぎます（{size}）。ブラウザでプレビューできないため、直接ダウンロードしてください",
+  "previewOnlyHint": "プレビューのみ（元画像は期限切れ）",
   "downloadImg": "画像をダウンロード",
   "previewTip": "プレビューをクリックすると拡大表示します",
   "statusReady": "準備完了",

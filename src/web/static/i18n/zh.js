@@ -130,6 +130,7 @@ window.CNCMAPS_I18N.zh = {
       'previewAlt': '地图预览',
       'previewTooLarge': '图像过大，浏览器无法预览，请直接下载',
       'previewTooLargeDims': '图像过大（{size}），浏览器无法预览，请直接下载',
+      'previewOnlyHint': '仅保留预览图，原图已过期',
       'downloadImg': '下载图片',
       'previewTip': '点击预览图可放大查看',
       'statusReady': '就绪',

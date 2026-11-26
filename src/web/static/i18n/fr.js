@@ -177,6 +177,7 @@ window.CNCMAPS_I18N.fr = {
   "previewAlt": "aperçu de la carte",
   "previewTooLarge": "Image trop grande pour l'aperçu du navigateur ; veuillez la télécharger directement",
   "previewTooLargeDims": "Image trop grande ({size}) pour l'aperçu ; veuillez la télécharger directement",
+  "previewOnlyHint": "Aperçu uniquement ; l'image d'origine a expiré",
   "downloadImg": "Télécharger l'image",
   "previewTip": "Cliquez sur l'aperçu pour zoomer",
   "statusReady": "Prêt",

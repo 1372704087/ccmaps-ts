@@ -130,6 +130,7 @@ window.CNCMAPS_I18N.en = {
       'previewAlt': 'map preview',
       'previewTooLarge': 'Image too large for the browser to preview; please download it directly',
       'previewTooLargeDims': 'Image too large ({size}) for browser preview; please download it directly',
+      'previewOnlyHint': 'Preview only; the full-size image has expired',
       'downloadImg': 'Download Image',
       'previewTip': 'Click the preview to zoom in',
       'statusReady': 'Ready',
