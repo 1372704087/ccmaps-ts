@@ -1,0 +1,43 @@
+name: Deploy Pages
+
+# Publishes the static web UI (browser-local rendering only) to GitHub Pages.
+# The server-side renderer needs Node and the game .mix files, so it is not deployed.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The browser renderer worker is a build artifact and is not committed.
+      - run: npm run build:worker
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: src/web/static
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
