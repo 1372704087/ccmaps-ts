@@ -645,7 +645,16 @@
     els.format.value = values.format === 'jpg' ? 'jpg' : (values.format === 'psd' ? 'psd' : 'png');
     els.engine.value = values.engine || '';
     els.sizeMode.value = values.sizeMode || '';
-    els.previewWidth.value = values.previewWidth || '0';
+    // Presets and history made before the size presets existed may hold a raw width
+    // (1024/2048/4096). Keep it selectable instead of silently falling back to original.
+    const savedWidth = String(values.previewWidth || '0');
+    if (!Array.from(els.previewWidth.options).some((opt) => opt.value === savedWidth)) {
+      const opt = document.createElement('option');
+      opt.value = savedWidth;
+      opt.textContent = savedWidth;
+      els.previewWidth.append(opt);
+    }
+    els.previewWidth.value = savedWidth;
     els.pngCompression.value = values.pngCompression || '4';
     els.pngCompressionVal.textContent = els.pngCompression.value;
     els.jpegQuality.value = values.jpegQuality || '95';
