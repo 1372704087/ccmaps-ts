@@ -53,6 +53,8 @@ let rendering = false;
 let lastFatal = '';
 
 const GAME_DIR = '/game';
+/** OffscreenCanvas cannot encode anything wider or taller than this. */
+const MAX_CANVAS_SIDE = 16384;
 /** Parsed archive indexes per (engine, expand setting). The worker outlives a single render,
  * so the next map skips the game folder scan and the MIX header parse. */
 const vfsCache = new Map<string, VirtualFileSystem>();
@@ -233,6 +235,19 @@ async function handleRender(req: RenderRequest): Promise<void> {
         ? 'SURFACE_TOO_LARGE'
         : (result === EngineResult.LoadTheaterFailed || missingAssets) ? 'ASSETS_MISSING' : 'RENDER_FAILED';
       post({ type: 'error', id: req.id, code, message: lastFatal || EngineResult[result] });
+      return;
+    }
+
+    // The surface may fit the pixel budget yet still exceed the canvas side limit, in which
+    // case convertToBlob would fail; report it so the UI can retry with a downscaled preview.
+    if (captured.rect.Width > MAX_CANVAS_SIDE || captured.rect.Height > MAX_CANVAS_SIDE) {
+      post({
+        type: 'error',
+        id: req.id,
+        code: 'SURFACE_TOO_LARGE',
+        message: `Rendered image ${captured.rect.Width}x${captured.rect.Height} exceeds the browser `
+          + `canvas limit of ${MAX_CANVAS_SIDE}px per side`,
+      });
       return;
     }
 

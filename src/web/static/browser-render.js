@@ -3,11 +3,37 @@
 (function () {
   'use strict';
 
-  // Guard rail for in-browser rendering (surface + RGBA copy). 0 would disable,
-  // but huge maps would crash the tab; tell the user to use server rendering.
-  const MAX_PIXELS = 64 * 1024 * 1024;
+  // Guard rail for in-browser rendering (BGR surface + depth buffer + RGBA copy).
+  // The auto tier follows navigator.deviceMemory, which Chromium buckets to 8 GB max.
+  const MP = 1024 * 1024;
+  const MIN_PIXELS = 64 * MP;
+  const MAX_PIXELS = 128 * MP;
+  // OffscreenCanvas cannot encode anything wider or taller than this.
+  const MAX_SIDE = 16384;
 
   const WORKER_URL = new URL('webworker/cncmaps-worker.js', document.baseURI);
+
+  function deviceMemoryGb() {
+    const gb = Number(navigator.deviceMemory);
+    return Number.isFinite(gb) && gb > 0 ? gb : 0;
+  }
+
+  function autoPixels() {
+    const gb = deviceMemoryGb();
+    if (gb >= 8) return MAX_PIXELS;
+    if (gb >= 4) return 96 * MP;
+    return MIN_PIXELS;
+  }
+
+  /** Maps the UI choice ('auto', '64', '96', '128') to a pixel budget. */
+  function resolvePixels(limit) {
+    switch (String(limit)) {
+      case '64': return 64 * MP;
+      case '96': return 96 * MP;
+      case '128': return 128 * MP;
+      default: return autoPixels();
+    }
+  }
 
   function supported() {
     return typeof Worker === 'function'
@@ -126,5 +152,14 @@
     }
   }
 
-  window.CncmapsBrowserRender = { supported, create: () => new BrowserRenderer(), MAX_PIXELS };
+  window.CncmapsBrowserRender = {
+    supported,
+    create: () => new BrowserRenderer(),
+    MIN_PIXELS,
+    MAX_PIXELS,
+    MAX_SIDE,
+    deviceMemoryGb,
+    autoPixels,
+    resolvePixels,
+  };
 })();

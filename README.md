@@ -89,7 +89,7 @@ npm run web
 
 默认监听 `http://localhost:5173`。页面默认使用**浏览器本地渲染**：选择本机地图文件和游戏安装目录后，渲染在 Web Worker 中完成，地图和游戏资源不会上传到服务器。也可以切换到「服务器」模式，由服务端渲染。
 
-`npm run web` 会先执行 `build:all`（编译引擎并打包浏览器渲染器），再启动服务；只改了前端静态文件、想跳过编译时用 `npm run web:serve`。服务只监听 `127.0.0.1`，并校验 `Host` / `Origin`，防止其他网页通过 DNS rebinding 或跨站请求调用本机渲染器。需要现代浏览器支持 `OffscreenCanvas` 与 `FileReaderSync`；超大地图可能超出浏览器内存，此时请切换到服务器模式（服务器模式仍建议用 `--preview-width` 或分带渲染）。
+`npm run web` 会先执行 `build:all`（编译引擎并打包浏览器渲染器），再启动服务；只改了前端静态文件、想跳过编译时用 `npm run web:serve`。服务只监听 `127.0.0.1`，并校验 `Host` / `Origin`，防止其他网页通过 DNS rebinding 或跨站请求调用本机渲染器。需要现代浏览器支持 `OffscreenCanvas` 与 `FileReaderSync`。浏览器渲染默认按 `navigator.deviceMemory` 自动限制在 64/96/128 MP（高级渲染里可手动指定），单边最多 16384px；超出时会自动改用 4096 宽预览渲染，需要原尺寸请切换到服务器模式（服务器模式仍建议用 `--preview-width` 或分带渲染）。
 
 页面支持：
 

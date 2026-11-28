@@ -237,6 +237,16 @@
           <input id="zipTemplate" type="text" spellcheck="false" value="{map}_{engine}_{width}x{height}.{ext}">
           <div class="crop-hint" data-i18n="zipTemplateHint">变量：{map} {engine} {width} {height} {index} {ext}，重名会自动加序号</div>
         </div>
+        <div class="field" id="browserMaxPixelsField">
+          <label for="browserMaxPixels" data-i18n="lblBrowserMaxPixels">浏览器渲染上限</label>
+          <select id="browserMaxPixels">
+            <option value="auto" selected data-i18n="browserMaxAuto">自动（按设备内存）</option>
+            <option value="64">64 MP</option>
+            <option value="96">96 MP</option>
+            <option value="128">128 MP</option>
+          </select>
+          <div class="crop-hint" id="browserMaxPixelsHint"></div>
+        </div>
       </div>
     </details>
 

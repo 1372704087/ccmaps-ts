@@ -25,6 +25,8 @@
     tunnelPaths: $('tunnelPaths'), tunnelPosition: $('tunnelPosition'), iceGrowth: $('iceGrowth'), compressTiles: $('compressTiles'),
     fixOverlays: $('fixOverlays'), fixTiles: $('fixTiles'), noExpandMixes: $('noExpandMixes'), ignoreLighting: $('ignoreLighting'),
     zipTemplate: $('zipTemplate'),
+    browserMaxPixels: $('browserMaxPixels'), browserMaxPixelsField: $('browserMaxPixelsField'),
+    browserMaxPixelsHint: $('browserMaxPixelsHint'),
     batchQueue: $('batchQueue'), batchQueueList: $('batchQueueList'), batchResumeBtn: $('batchResumeBtn'), batchRetryBtn: $('batchRetryBtn'), batchClearBtn: $('batchClearBtn'),
     jpegQualityField: $('jpegQualityField'), pngCompressionField: $('pngCompressionField'),
     presetSelect: $('presetSelect'), presetSaveBtn: $('presetSaveBtn'), presetDeleteBtn: $('presetDeleteBtn'),
@@ -95,6 +97,11 @@
   let renderMode = localStorage.getItem(MODE_KEY) === 'server'
     ? 'server'
     : (BR_CLIENT && BR_CLIENT.supported() ? 'browser' : 'server');
+
+  // Browser render ceiling chosen in the advanced panel: 'auto' | '64' | '96' | '128' (MP).
+  const BROWSER_LIMIT_KEY = 'cncmaps_browser_max_pixels';
+  let browserMaxPixelsMode = localStorage.getItem(BROWSER_LIMIT_KEY);
+  if (!['auto', '64', '96', '128'].includes(browserMaxPixelsMode)) browserMaxPixelsMode = 'auto';
 
   // ---- i18n ----
   const LANG_KEY = 'cncmaps_lang';
@@ -460,6 +467,25 @@
     else if (renderMode === 'server') void refreshServerHealth();
   }
 
+  function browserLimitPixels() {
+    return BR_CLIENT && BR_CLIENT.resolvePixels
+      ? BR_CLIENT.resolvePixels(browserMaxPixelsMode)
+      : 64 * 1024 * 1024;
+  }
+
+  function updateBrowserMaxHint() {
+    if (!els.browserMaxPixelsHint) return;
+    const mp = Math.round(browserLimitPixels() / (1024 * 1024));
+    if (browserMaxPixelsMode !== 'auto') {
+      els.browserMaxPixelsHint.textContent = tf('browserMaxFixedHint', { mp });
+      return;
+    }
+    const gb = BR_CLIENT && BR_CLIENT.deviceMemoryGb ? BR_CLIENT.deviceMemoryGb() : 0;
+    els.browserMaxPixelsHint.textContent = gb > 0
+      ? tf('browserMaxAutoHint', { mp, gb })
+      : tf('browserMaxUnknownHint', { mp });
+  }
+
   function applyModeUI() {
     const browser = renderMode === 'browser';
     els.renderMode.querySelectorAll('button').forEach((b) => {
@@ -475,6 +501,8 @@
     els.assetState.textContent = assetInfo
       ? tf('assetLocalReady', assetInfo)
       : t('assetStateEmptyBrowser');
+    if (els.browserMaxPixelsField) els.browserMaxPixelsField.style.display = browser ? '' : 'none';
+    updateBrowserMaxHint();
   }
 
   function updateRenderButtons() {
@@ -1745,6 +1773,7 @@
         engine: els.engine.value,
         sizeMode: els.sizeMode.value,
         previewWidth: Number(els.previewWidth.value) || 0,
+        maxPixels: browserLimitPixels(),
         jpegQuality: Number(els.jpegQuality.value) || 95,
         markStartPos: els.markStartPos.checked,
         markOre: els.markOre.checked,
@@ -1796,10 +1825,37 @@
         brAssetsSig = sig;
       }
       startedRendering = true;
-      const res = await br.render(selectedMap.file, selectedMap.name, opts, (pct, phase) => {
-        setProgress(pct, phaseLabel(phase), () => phaseLabel(phase));
-      });
-      cacheBrowserResult(cacheKey, res);
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          res = await br.render(selectedMap.file, selectedMap.name, opts, (pct, phase) => {
+            setProgress(pct, phaseLabel(phase), () => phaseLabel(phase));
+          });
+          break;
+        } catch (e) {
+          // The full-size surface is past the browser budget (or the 16384px canvas side
+          // limit): retry once as a downscaled preview instead of failing outright.
+          if (e && e.code === 'SURFACE_TOO_LARGE' && !opts.previewWidth && attempt === 0) {
+            opts.previewWidth = 4096;
+            const note = tf('browserAutoPreview', { w: opts.previewWidth });
+            appendLog(note, 'warn');
+            openLog();
+            renderToast(note, 'warn');
+            setProgress(1, t('phaseSubmit'), () => t('phaseSubmit'));
+            continue;
+          }
+          throw e;
+        }
+      }
+      // A fallback retry changes the options, so the stored cache key must match them.
+      const finalKey = JSON.stringify([
+        sig,
+        selectedMap.name,
+        selectedMap.file.size,
+        selectedMap.file.lastModified || 0,
+        opts,
+      ]);
+      cacheBrowserResult(finalKey, res);
       presentBrowserResult(res, renderValues);
     } catch (e) {
       lastRenderResult = { ok: false, error: e };
@@ -2958,6 +3014,12 @@
   });
   els.format.addEventListener('change', applyFormatFields);
   els.engine.addEventListener('change', setEngineTag);
+  els.browserMaxPixels.value = browserMaxPixelsMode;
+  els.browserMaxPixels.addEventListener('change', () => {
+    browserMaxPixelsMode = els.browserMaxPixels.value;
+    localStorage.setItem(BROWSER_LIMIT_KEY, browserMaxPixelsMode);
+    updateBrowserMaxHint();
+  });
   els.cropEnable.addEventListener('change', syncCropInputs);
   els.presetSelect.addEventListener('change', () => {
     if (els.presetSelect.value === '') return;
