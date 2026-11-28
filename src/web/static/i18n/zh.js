@@ -76,6 +76,7 @@ window.CNCMAPS_I18N.zh = {
       'lblJpegQuality': 'JPEG 质量',
       'lblPreviewWidth': '预览宽度',
       'previewOriginal': '原始尺寸',
+      'previewSizeHint': '仅缩小不放大；选 16:9 画幅可得到标准 720P/1080P/2K/4K 分辨率',
       'lblBrowserMaxPixels': '浏览器渲染上限',
       'browserMaxAuto': '自动（按设备内存）',
       'browserMaxAutoHint': '自动：{mp}MP（设备内存约 {gb}GB）',

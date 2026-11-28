@@ -76,6 +76,7 @@ window.CNCMAPS_I18N.en = {
       'lblJpegQuality': 'JPEG Quality',
       'lblPreviewWidth': 'Preview Width',
       'previewOriginal': 'Original Size',
+      'previewSizeHint': 'Downscale only; pick the 16:9 aspect for standard 720P/1080P/2K/4K output',
       'lblBrowserMaxPixels': 'Browser render limit',
       'browserMaxAuto': 'Auto (by device memory)',
       'browserMaxAutoHint': 'Auto: {mp}MP (device memory ~{gb}GB)',

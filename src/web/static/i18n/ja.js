@@ -76,6 +76,7 @@ window.CNCMAPS_I18N.ja = {
   "lblJpegQuality": "JPEG 品質",
   "lblPreviewWidth": "プレビュー幅",
   "previewOriginal": "元のサイズ",
+  "previewSizeHint": "縮小のみ。16:9 を選ぶと 720P/1080P/2K/4K になります",
   "lblBrowserMaxPixels": "ブラウザ描画上限",
   "browserMaxAuto": "自動（メモリに応じて）",
   "browserMaxAutoHint": "自動：{mp}MP（搭載メモリ約 {gb}GB）",

@@ -76,6 +76,7 @@ window.CNCMAPS_I18N.fr = {
   "lblJpegQuality": "Qualité JPEG",
   "lblPreviewWidth": "Largeur d'aperçu",
   "previewOriginal": "Taille d'origine",
+  "previewSizeHint": "Réduction uniquement ; choisissez 16:9 pour un rendu 720P/1080P/2K/4K",
   "lblBrowserMaxPixels": "Limite de rendu navigateur",
   "browserMaxAuto": "Auto (selon la mémoire)",
   "browserMaxAutoHint": "Auto : {mp}MP (mémoire ~{gb}GB)",
