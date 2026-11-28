@@ -3,7 +3,7 @@
   'use strict';
 
   // Keep in sync with package.json.
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
 
   const $ = (id) => document.getElementById(id);
   const els = {
